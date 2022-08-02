@@ -82,7 +82,7 @@ if __name__ == '__main__':
     if len(detections.detections) != 0:
         for i in range(len(detections.detections)):
             name = detections.detections[i].name
-            if name == 'apple':
+            if name == 'card':
                 chosen_object = detections.detections[i]
                 print('Object ' + name + ' detected')
                 break
@@ -91,7 +91,7 @@ if __name__ == '__main__':
 
     else:
         chosen_object = -1
-        print('Object not found')
+        print('No object found')
 
     if chosen_object == -2:
         print('Specific object not found')
