@@ -1,20 +1,22 @@
 #!/usr/bin/env python
 
-import hsrb_interface
+#import hsrb_interface
 from hsrb_interface import Robot, geometry
 import rospy
 import sys
 import tf2_ros
-import tf2_msgs.msg
+#import tf2_msgs.msg
 import geometry_msgs.msg
+import tf2_geometry_msgs.tf2_geometry_msgs
 
 import moveit_commander
 import moveit_msgs.msg
-from std_msgs.msg import String
-from moveit_commander.conversions import pose_to_list
+#from std_msgs.msg import String
+#from moveit_commander.conversions import pose_to_list
 
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from math import pi as pi
+from math import cos, sin
 from std_srvs.srv import Empty
 
 
@@ -77,10 +79,8 @@ class ExecuteSuctionServer:
         #    (-1.5 + transform[0][0], -1.5 + transform[0][1], -1, 1.5 + transform[0][0], 1.5 + transform[0][1], 3))
 
         move_group.allow_replanning(True)
-        self.add_box('floor')
-        #move_group.set_workspace((-20,-20,-1,20,20,4))
+        self.add_floor()
         # move_group.set_num_planning_attempts(5)
-        # self.create_collision_environment()
 
         return move_group
 
@@ -97,18 +97,53 @@ class ExecuteSuctionServer:
 
         print('Starting Moveit Commander')
 
-        object_pos = self.tfBuffer.lookup_transform('odom', goal_frame, rospy.Time(), rospy.Duration(4.0))
-        pose_goal = geometry_msgs.msg.Pose()
-        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion(
-            [object_pos.transform.rotation.x, object_pos.transform.rotation.y, object_pos.transform.rotation.z,
-             object_pos.transform.rotation.w])
-        ang_x_axis = ang_x_axis - pi
-        [pose_goal.orientation.x, pose_goal.orientation.y, pose_goal.orientation.z,
-         pose_goal.orientation.w] = quaternion_from_euler(ang_x_axis, ang_y_axis, ang_z_axis)
-        pose_goal.position.x = object_pos.transform.translation.x
-        pose_goal.position.y = object_pos.transform.translation.y
-        pose_goal.position.z = object_pos.transform.translation.z + 0.2
 
+        # Distance between hsr hand and suction cup
+        hand2cup = self.tfBuffer.lookup_transform('hand_palm_link', 'hand_l_finger_vacuum_frame', rospy.Time(),
+                                                  rospy.Duration(4.0))
+        [hand2cup_ang_x_axis, hand2cup_ang_y_axis, hand2cup_ang_z_axis] = euler_from_quaternion(
+            [hand2cup.transform.rotation.x, hand2cup.transform.rotation.y, hand2cup.transform.rotation.z,
+             hand2cup.transform.rotation.w])
+
+        pose_goal = geometry_msgs.msg.PoseStamped()
+        pose_goal.header.frame_id = 'found_object'
+
+        # hand2cup distance gets added to object position / therefore rotation around x-axis
+        # z_offset from cup to object should be 0.1
+        rot_angle = -pi - hand2cup_ang_x_axis
+        pose_goal.pose.position.x = -hand2cup.transform.translation.x
+        pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) * hand2cup.transform.translation.z)
+        pose_goal.pose.position.z = 0.1 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) * hand2cup.transform.translation.z)
+        pose_goal.pose.orientation.x = 0
+        pose_goal.pose.orientation.y = 0
+        pose_goal.pose.orientation.z = 0
+        pose_goal.pose.orientation.w = 1
+
+        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([pose_goal.pose.orientation.x,
+            pose_goal.pose.orientation.y, pose_goal.pose.orientation.z, pose_goal.pose.orientation.w])
+        ang_x_axis = ang_x_axis + rot_angle
+        [pose_goal.pose.orientation.x, pose_goal.pose.orientation.y, pose_goal.pose.orientation.z,
+            pose_goal.pose.orientation.w] = quaternion_from_euler(ang_x_axis, ang_y_axis, ang_z_axis)
+
+        # moveit needs msg.Pose type
+        pose_goal_odom = self.tfBuffer.transform(pose_goal, 'odom', rospy.Duration(4.0))
+        pose_goal = geometry_msgs.msg.Pose()
+        pose_goal.position.x = pose_goal_odom.pose.position.x
+        pose_goal.position.y = pose_goal_odom.pose.position.y
+        pose_goal.position.z = pose_goal_odom.pose.position.z
+        pose_goal.orientation.x = pose_goal_odom.pose.orientation.x
+        pose_goal.orientation.y = pose_goal_odom.pose.orientation.y
+        pose_goal.orientation.z = pose_goal_odom.pose.orientation.z
+        pose_goal.orientation.w = pose_goal_odom.pose.orientation.w
+
+
+
+        check_exit = input("Press Enter to publish goal_frame...")
+        if check_exit == 'x': quit()
+        self.publish_goal(pose_goal)
+
+        check_exit = input("Press Enter to move to found_object...")
+        if check_exit == 'x': quit()
         self.move_group.set_pose_target(pose_goal)
         success = self.move_group.go(wait=True)
         print('Move successful: ' + str(success))
@@ -116,25 +151,20 @@ class ExecuteSuctionServer:
         rospy.sleep(1)
 
         if success:
+            check_exit = input("Press Enter to move suction cup...")
+            if check_exit == 'x': quit()
             self.whole_body.linear_weight = 100.0
+            self.whole_body.angular_weight = 100.0
             self.whole_body.end_effector_frame = u'hand_l_finger_vacuum_frame'
-            self.whole_body.move_end_effector_pose(geometry.pose(ej=-pi), goal_frame)
+            #self.whole_body.move_end_effector_pose(geometry.pose(z= 0.2, ej=-pi), goal_frame)
+            self.whole_body.move_end_effector_by_line((0, 0, 1), 0.1)
 
 
-    def add_box(self, name, position_x=0.0, position_y=0.0,
-                position_z=0.0, size_x=0.1, size_y=0.1, size_z=0.1):
-        """ Adds a box in the map frame to the MoveIt scene.
+    def add_floor(self, name='floor', position_x=0.0, position_y=0.0,
+                position_z=-0.07, size_x=20, size_y=20, size_z=0.1):
+        # Creates a flat box under the robot to represent the floor
+        # Octomap voxels get neglected around normal collision objects, without the floor moveit detects a collision
 
-        Arguments:
-            name {str}
-            position_x {int} -- x coordinate in map frame (default: {0})
-            position_y {int} -- y coordinate in map frame (default: {0})
-            position_z {int} -- z coordinate in map frame (default: {0})
-            size_x {float} -- size in x direction in meter (default: {0.1})
-            size_y {float} -- size in y direction in meter (default: {0.1})
-            size_z {float} -- size in z direction in meter (default: {0.1})
-        """
-        #rospy.sleep(0.2)
         box_pose = geometry_msgs.msg.PoseStamped()
         box_pose.header.frame_id = "map"
         box_pose.pose.orientation.w = 1.0
@@ -143,18 +173,39 @@ class ExecuteSuctionServer:
         box_pose.pose.position.z = position_z
         box_name = name
         self.scene.add_box(box_name, box_pose, size=(size_x, size_y, size_z))
+        rospy.sleep(0.2)
+
+    def publish_goal(self, pose_goal):
+        self.broadcaster = tf2_ros.StaticTransformBroadcaster()
+
+        goal_frame = geometry_msgs.msg.TransformStamped()
+        goal_frame.header.frame_id = 'odom'
+        goal_frame.header.stamp = rospy.Time.now()
+
+        goal_frame.child_frame_id = 'goal_frame'
+        goal_frame.transform.translation.x = pose_goal.position.x
+        goal_frame.transform.translation.y = pose_goal.position.y
+        goal_frame.transform.translation.z = pose_goal.position.z
+
+        goal_frame.transform.rotation.x = pose_goal.orientation.x
+        goal_frame.transform.rotation.y = pose_goal.orientation.y
+        goal_frame.transform.rotation.z = pose_goal.orientation.z
+        goal_frame.transform.rotation.w = pose_goal.orientation.w
+
+        self.broadcaster.sendTransform(goal_frame)
+
 
 if __name__ == '__main__':
     rospy.init_node('execute_suction_server')
     server = ExecuteSuctionServer()
 
     rospy.sleep(1)
-
-    try:
+    server.execute('found_object')
+    #try:
         #server.execute('my_frame')
-        server.execute('found_object')
-    except Exception as e:
-        print(e)
+        #server.execute('found_object')
+    #except Exception as e:
+        #print(e)
 
     rospy.spin()
 

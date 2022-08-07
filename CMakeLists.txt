@@ -10,7 +10,8 @@ project(hsr-small_objects)
 find_package(catkin REQUIRED
 std_msgs
 rospy
-roscpp)
+roscpp
+octomap REQUIRED)
 
 
 
