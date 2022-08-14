@@ -40,8 +40,8 @@ class ExecuteSuctionServer:
         self.clear_octomap = rospy.ServiceProxy('/clear_octomap', Empty)
 
         self.server = actionlib.SimpleActionServer(
-            'execute_suction', geometry_msgs.msg.PoseStamped, self.execute, False)
-        self.server.start()
+            'execute_suction', ExecuteGraspAction, self.execute, False)
+        #self.server.start()
 
         print('SuctionServer ready')
 
