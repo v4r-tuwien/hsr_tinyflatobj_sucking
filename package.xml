@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>hsr-small_objects</name>
+  <name>hsr_small_objects</name>
   <version>0.0.0</version>
   <description>Expansion for the grasping_pipeline for small objects</description>
 
@@ -61,6 +61,13 @@
   <exec_depend>rospy</exec_depend>
   <exec_depend>tf2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+<build_depend>actionlib</build_depend>
+<build_depend>actionlib_msgs</build_depend>
+<exec_depend>actionlib</exec_depend>
+<exec_depend>actionlib_msgs</exec_depend>
+<build_depend>geometry_msgs</build_depend>
+<exec_depend>geometry_msgs</exec_depend>
+<build_depend>message_generation</build_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

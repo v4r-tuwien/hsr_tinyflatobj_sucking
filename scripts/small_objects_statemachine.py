@@ -14,6 +14,10 @@ import smach_ros
 from hsrb_interface import Robot
 #from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
+import roslib
+roslib.load_manifest('hsr_small_objects')
+from hsr_small_objects.msg import FindObjectAction
+
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'arm_lift_joint': 0.0,
@@ -28,7 +32,7 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
 
 
 class States(Enum):
-    FIND_OBJECTS = 1
+    FIND_OBJECT = 1
     PICK_UP = 2
     LAY_DOWN = 3
     ACTIVATE_SUCTION = 4
@@ -41,7 +45,7 @@ class States(Enum):
 
 
 # Mapping of states to characters
-states_keys = {States.FIND_OBJECTS: 'f',
+states_keys = {States.FIND_OBJECT: 'f',
                States.PICK_UP: 'p',
                States.LAY_DOWN: 'l',
                States.ACTIVATE_SUCTION: 'a',
@@ -76,8 +80,8 @@ class UserInput(smach.State):
             char_in = user_input.lower()
 
             # Find Object
-            if char_in == states_keys[States.FIND_OBJECTS]:
-                print('Finding objects')
+            if char_in == states_keys[States.FIND_OBJECT]:
+                print('Finding object')
                 return 'finding'
 
             # Picking up object
@@ -132,7 +136,7 @@ class UserInput(smach.State):
 
             # Help
             elif char_in is None or char_in == states_keys[States.HELP]:
-                print('\n\n\tFind_Objects - HSR uses RGB and depth image to find and localize known flat objects.')
+                print('\n\n\tFind_Object - HSR uses RGB and depth image to find and localize known flat objects.')
 
             # Quit
             elif char_in is None or char_in == states_keys[States.QUIT]:
@@ -157,7 +161,7 @@ class UserInput(smach.State):
             print(states_keys[member] + ' - ' + name)
 
 
-class FindObjects(smach.State):
+class FindObject(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded'])
@@ -262,7 +266,7 @@ def main():
     with sm:
         smach.StateMachine.add('USER_INPUT',
                                UserInput(),
-                               transitions={'finding': 'Find_Objects',
+                               transitions={'finding': 'Find_Object',
                                             'picking': 'Pick_Object',
                                             'laying': 'Lay_Object',
                                             'start_suction': 'Start_Suction',
@@ -271,8 +275,8 @@ def main():
                                             'quit': 'end'},
                                remapping={'config': 'config'})
 
-        smach.StateMachine.add('Find_Objects',
-                               FindObjects(),
+        smach.StateMachine.add('Find_Object',
+                               FindObject(),
                                transitions={'succeeded': 'USER_INPUT'})
 
         smach.StateMachine.add('Pick_Object',

@@ -1,1 +1,1 @@
-# hsr-small_objects
+# hsr_small_objects

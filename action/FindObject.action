@@ -1,0 +1,9 @@
+# Define the goal
+geometry_msgs/PoseStamped[] found_object
+bool retries
+---
+# Define the result
+bool success
+---
+# Define a feedback message
+float32 percent_complete
