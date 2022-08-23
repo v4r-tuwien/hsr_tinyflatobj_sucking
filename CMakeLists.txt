@@ -18,7 +18,8 @@ geometry_msgs
 sensor_msgs)
 
 
-add_action_files(DIRECTORY action FILES FindObject.action)
+add_action_files(DIRECTORY action 
+FILES FindObject.action PickObject.action)
 
 generate_messages(DEPENDENCIES 
 actionlib_msgs

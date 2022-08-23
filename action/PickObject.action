@@ -1,5 +1,5 @@
 # Define the goal
-string object_name # which object should be found
+string pick_object # object to pick
 ---
 # Define the result
 string result_info

@@ -14,20 +14,28 @@ import moveit_msgs.msg
 #from std_msgs.msg import String
 #from moveit_commander.conversions import pose_to_list
 
-from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_matrix
 from math import pi as pi
 from math import cos, sin
 from std_srvs.srv import Empty
+
+from hsr_small_objects.msg import PickObjectAction, PickObjectActionResult
 import actionlib
+import roslib
+roslib.load_manifest('hsr_small_objects')
 
 
 
-class ExecuteSuctionServer:
+class ExecuteSuctionActionServer:
     def __init__(self):
+        # Prepare action server
+        self.server = actionlib.SimpleActionServer('Pick_Object', PickObjectAction, self.execute, False)
+        self.server.start()
+
         # Preparation for using the robot functions
         self.robot = Robot()
         self.whole_body = self.robot.try_get('whole_body')
-        self.gripper = self.robot.get('gripper')
+        self.suction_cup = self.robot.get('suction')
         self.omni_base = self.robot.get('omni_base')
 
         # For coordinate transformations
@@ -39,9 +47,6 @@ class ExecuteSuctionServer:
         # For resetting the collision map
         self.clear_octomap = rospy.ServiceProxy('/clear_octomap', Empty)
 
-        self.server = actionlib.SimpleActionServer(
-            'execute_suction', geometry_msgs.msg.PoseStamped, self.execute, False)
-        self.server.start()
 
         print('SuctionServer ready')
 
@@ -73,7 +78,18 @@ class ExecuteSuctionServer:
         return move_group
 
 
-    def execute(self, goal_frame):
+    def execute(self, goal):
+        # define result of action_sever
+        result = PickObjectActionResult().result
+        # check if found_object frame is published
+        try:
+            test = self.tfBuffer.lookup_transform('odom', 'found_object_' + goal.pick_object, rospy.Time(), rospy.Duration(4.0))
+        except Exception as e:
+            if 'source_frame does not exist' in str(e):
+                result. result_info= 'goal_frame_missing'
+            self.server.set_succeeded(result)
+            return
+
         # Define the actual workspace as a 3x3x3 box with hsr in the middle
         hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
         self.move_group.set_workspace(
@@ -93,15 +109,19 @@ class ExecuteSuctionServer:
             [hand2cup.transform.rotation.x, hand2cup.transform.rotation.y, hand2cup.transform.rotation.z,
              hand2cup.transform.rotation.w])
 
+
         pose_goal = geometry_msgs.msg.PoseStamped()
-        pose_goal.header.frame_id = 'found_object'
+        pose_goal.header.frame_id = 'found_object_' + goal.pick_object
+
 
         # hand2cup distance gets added to object position / therefore rotation around x-axis
         # z_offset from cup to object should be 0.1
         rot_angle = -pi - hand2cup_ang_x_axis
         pose_goal.pose.position.x = -hand2cup.transform.translation.x
-        pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) * hand2cup.transform.translation.z)
-        pose_goal.pose.position.z = 0.1 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) * hand2cup.transform.translation.z)
+        pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
+                                      hand2cup.transform.translation.z)
+        pose_goal.pose.position.z = 0.05 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
+                                           hand2cup.transform.translation.z)
         pose_goal.pose.orientation.x = 0
         pose_goal.pose.orientation.y = 0
         pose_goal.pose.orientation.z = 0
@@ -125,27 +145,33 @@ class ExecuteSuctionServer:
         pose_goal.orientation.w = pose_goal_odom.pose.orientation.w
 
 
-
-        check_exit = input("Press Enter to publish goal_frame...")
-        if check_exit == 'x': quit()
         self.publish_goal(pose_goal)
-
-        check_exit = input("Press Enter to move to found_object...")
-        if check_exit == 'x': quit()
         self.move_group.set_pose_target(pose_goal)
-        success = self.move_group.go(wait=True)
-        print('Move successful: ' + str(success))
+        moveit_success = self.move_group.go(wait=True)
         self.move_group.stop()
         rospy.sleep(1)
 
-        if success:
-            check_exit = input("Press Enter to move suction cup...")
-            if check_exit == 'x': quit()
+        if moveit_success:
+            # set weights to make sure robot does not use base movement
             self.whole_body.linear_weight = 100.0
             self.whole_body.angular_weight = 100.0
             self.whole_body.end_effector_frame = u'hand_l_finger_vacuum_frame'
-            #self.whole_body.move_end_effector_pose(geometry.pose(z= 0.2, ej=-pi), goal_frame)
-            self.whole_body.move_end_effector_by_line((0, 0, 1), 0.1)
+            ###self.whole_body.move_end_effector_pose(geometry.pose(z= 0.2, ej=-pi), goal_frame)
+            self.suction_cup.command(True)
+            self.whole_body.move_end_effector_by_line((0, 0, 1), 0.05)
+            rospy.sleep(1)
+            self.whole_body.move_end_effector_by_line((0, 0, 1), -0.1)
+
+            # check force sensor
+            # rostopic echo /hsrb/wrist_wrench/compensated
+
+
+            result.result_info = 'pick_object_succeeded'
+            self.server.set_succeeded(result)
+
+        else:
+            result.result_info = 'moveit_failed'
+            self.server.set_succeeded(result)
 
 
     def add_floor(self, name='floor', position_x=0.0, position_y=0.0,
@@ -170,7 +196,7 @@ class ExecuteSuctionServer:
         goal_frame.header.frame_id = 'odom'
         goal_frame.header.stamp = rospy.Time.now()
 
-        goal_frame.child_frame_id = 'goal_frame'
+        goal_frame.child_frame_id = 'suction_cup_goal_frame'
         goal_frame.transform.translation.x = pose_goal.position.x
         goal_frame.transform.translation.y = pose_goal.position.y
         goal_frame.transform.translation.z = pose_goal.position.z
@@ -184,17 +210,10 @@ class ExecuteSuctionServer:
 
 
 if __name__ == '__main__':
-    rospy.init_node('execute_suction_server')
-    server = ExecuteSuctionServer()
 
-    rospy.sleep(1)
-    server.execute('found_object')
-    #try:
-        #server.execute('my_frame')
-        #server.execute('found_object')
-    #except Exception as e:
-        #print(e)
-
+    rospy.init_node('execute_suction_action_server')
+    server = ExecuteSuctionActionServer()
+    print('Execute_suction_action_server started')
     rospy.spin()
 
 

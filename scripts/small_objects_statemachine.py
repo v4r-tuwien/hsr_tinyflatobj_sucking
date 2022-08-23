@@ -16,12 +16,12 @@ from hsrb_interface import Robot
 
 import roslib
 roslib.load_manifest('hsr_small_objects')
-from hsr_small_objects.msg import FindObjectAction
+from hsr_small_objects.msg import FindObjectAction, PickObjectAction
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'arm_lift_joint': 0.0,
-                           'arm_roll_joint': 1.570,
+                           'arm_roll_joint': -1.570,
                            'hand_motor_joint': 1.0,
                            'head_pan_joint': 0.0,
                            'head_tilt_joint': -0.75,
@@ -62,8 +62,8 @@ class UserInput(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['finding', 'picking', 'laying', 'start_suction', 'stop_suction',
                              'neutral', 'quit'],
-                             input_keys=['config'],
-                             output_keys=['config'])
+                             input_keys=['retry', 'object_action', 'object_name', 'auto_continue'],
+                             output_keys=['retry', 'object_action', 'object_name', 'auto_continue'])
 
 
     def execute(self, userdata):
@@ -115,10 +115,12 @@ class UserInput(smach.State):
             elif char_in == states_keys[States.SETTINGS]:
                 while not rospy.is_shutdown():
                     print('Settings:')
-                    print('\t1 - Allow retries with base movement:\t' + str(userdata.config.retry))
-                    print('\t2 - Handover after pick-up:\t\t' + str(userdata.config.handover))
+                    print('\t1 - Allow retries with base movement:\t\t' + str(userdata.retry))
+                    print('\t2 - Action after pick-up:\t\t\t' + str(userdata.object_action))
+                    print('\t3 - Change object, which should be found\t' + str(userdata.object_name))
+                    print('\t4 - Continue automatic with the next action\t' + str(userdata.auto_continue))
                     print('')
-                    print('\t3 - Back')
+                    print('\t5 - Back')
                     while True:
                         user_input = input('CMD> ')
                         if len(user_input) == 1:
@@ -126,10 +128,28 @@ class UserInput(smach.State):
                         print('Please enter only one character')
                     char_in = user_input.lower()
                     if char_in == '1':
-                        userdata.config.change_retry()
+                        if userdata.retry:
+                            userdata.retry = False
+                        else:
+                            userdata.retry = True
                     elif char_in == '2':
-                        userdata.config.change_handover()
+                        if userdata.object_action == 'handover':
+                            userdata.object_action = 'lay_down'
+                        elif userdata.object_action == 'lay_down':
+                            userdata.object_action = 'nothing'
+                        else:
+                            userdata.object_action = 'handover'
                     elif char_in == '3':
+                        if userdata.object_name == 'card':
+                            userdata.object_name = 'nix'
+                        else:
+                            userdata.object_name = 'card'
+                    elif char_in == '4':
+                        if userdata.auto_continue:
+                            userdata.auto_continue = False
+                        else:
+                            userdata.auto_continue = True
+                    elif char_in == '5':
                         break
                     else:
                         print('No valid option.')
@@ -161,25 +181,6 @@ class UserInput(smach.State):
             print(states_keys[member] + ' - ' + name)
 
 
-class FindObject(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Object gefunden')
-        return 'succeeded'
-
-class PickObject(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Object aufgehoben')
-        return 'succeeded'
 
 class LayObject(smach.State):
 
@@ -195,30 +196,56 @@ class StartSuction(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded'])
+        self.robot = Robot()
+        self.suction = self.robot.try_get('suction')
 
-    def execute(self):
-        rospy.loginfo('Info')
-        print('Starte Pumpe')
+    def execute(self, userdata):
+        print(50*'#' + '\n')
+        if self.suction != None:
+            rospy.loginfo('Starting suction')
+            self.suction.command(True)
+        else:
+            rospy.loginfo('Could not start suction, is hsr connection established?')
+        print(50*'#' + '\n')
         return 'succeeded'
 
 class StopSuction(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded'])
+        self.robot = Robot()
+        self.suction = self.robot.try_get('suction')
 
-    def execute(self):
-        rospy.loginfo('Info')
-        print('Stoppe Pumpe')
+    def execute(self, userdata):
+        print(50*'#' + '\n')
+        if self.suction != None:
+            rospy.loginfo('Stopping suction')
+            self.suction.command(False)
+        else:
+            rospy.loginfo('Could not stop suction, is hsr connection established?')
+        print(50 * '#' + '\n')
         return 'succeeded'
 
 class GoToNeutral(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded'])
+        self.robot = Robot()
+        self.whole_body = self.robot.try_get('whole_body')
 
     def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Neutralposition')
+        print(50 * '#' + '\n')
+        if self.whole_body != None:
+            rospy.loginfo('Returning to neutral position')
+            self.whole_body.move_to_joint_positions(neutral_joint_positions)
+            rospy.sleep(1.0)
+            vel = self.whole_body.joint_velocities
+            while all(abs(i) > 0.05 for i in vel.values()):
+                vel = self.whole_body.joint_velocities
+            rospy.sleep(2)
+        else:
+            rospy.loginfo('Could not return to neutral, is hsr connection established?')
+        print(50 * '#' + '\n')
         return 'succeeded'
 
 class Quit(smach.State):
@@ -231,38 +258,50 @@ class Quit(smach.State):
         print('Abschalten')
         return 'succeeded'
 
-class CheckError(smach.State):
+class NextStep(smach.State):
 
     def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
+        smach.State.__init__(self, outcomes=['finding', 'picking', 'laying', 'neutral', 'user_input'],
+                             input_keys=['retry', 'object_action', 'auto_continue', 'result_info'])
 
     def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Mhm was lief denn falsch?')
-        return 'succeeded'
+        print(50*'#' + '\n')
+        rospy.loginfo('Planning next step')
+        out = 'user_input'
 
-class config():
-    def __init__(self):
-        self.retry = True
-        self.handover = False
+        if userdata.result_info == 'find_object_succeeded':
+            if userdata.auto_continue == True:
+                out = 'picking'
+            else:
+                out = 'user_input'
 
-    def change_retry(self):
-        if self.retry == True:
-            self.retry = False
-        else:
-            self.retry = True
+        if userdata.result_info == 'pick_object_succeeded':
+            if userdata.auto_continue == True:
+                if userdata.object_action == 'lay_down':
+                    out = 'laying'
+                elif userdata.object_action == 'handover':
+                    out = 'handover'
+                else:
+                    out = 'user_input'
+            else:
+                out = 'user_input'
 
-    def change_handover(self):
-        if self.handover == True:
-            self.handover = False
-        else:
-            self.handover = True
+        print(50 * '#' + '\n')
+        return out
+
 
 def main():
     rospy.init_node('small_objects_statemachine')
 
     sm = smach.StateMachine(outcomes=['end'])
-    sm.userdata.config = config()
+
+    # define some userdata
+    sm.userdata.retry = True
+    sm.userdata.object_action = 'handover'
+    sm.userdata.object_name = 'card'
+    sm.userdata.auto_continue = False
+    sm.userdata.result_info = ''
+
     with sm:
         smach.StateMachine.add('USER_INPUT',
                                UserInput(),
@@ -273,15 +312,29 @@ def main():
                                             'stop_suction': 'Stop_Suction',
                                             'neutral': 'Go_To_Neutral',
                                             'quit': 'end'},
-                               remapping={'config': 'config'})
+                               remapping={'retry': 'retry',
+                                          'object_action': 'object_action',
+                                          'object_name': 'object_name'})
 
         smach.StateMachine.add('Find_Object',
-                               FindObject(),
-                               transitions={'succeeded': 'USER_INPUT'})
+                               smach_ros.SimpleActionState('Find_Object', FindObjectAction,
+                                                           goal_slots=['object_name'],
+                                                           result_slots=['result_info'],),
+                               transitions={'succeeded': 'Next_Step',
+                                            'preempted': 'USER_INPUT',
+                                            'aborted': 'USER_INPUT'},
+                               remapping={'object_name': 'object_name',
+                                          'result_info': 'result_info'})
 
         smach.StateMachine.add('Pick_Object',
-                               PickObject(),
-                               transitions={'succeeded': 'USER_INPUT'})
+                               smach_ros.SimpleActionState('Pick_Object', PickObjectAction,
+                                                           goal_slots=['pick_object'],
+                                                           result_slots=['result_info'],),
+                               transitions={'succeeded': 'Next_Step',
+                                            'preempted': 'USER_INPUT',
+                                            'aborted': 'USER_INPUT'},
+                               remapping={'pick_object': 'object_name',
+                                          'result_info': 'result_info'})
 
         smach.StateMachine.add('Lay_Object',
                                LayObject(),
@@ -299,9 +352,17 @@ def main():
                                GoToNeutral(),
                                transitions={'succeeded': 'USER_INPUT'})
 
-        smach.StateMachine.add('Check_Error',
-                               CheckError(),
-                               transitions={'succeeded': 'USER_INPUT'})
+        smach.StateMachine.add('Next_Step',
+                               NextStep(),
+                               transitions={'finding': 'Find_Object',
+                                            'picking': 'Pick_Object',
+                                            'laying': 'Lay_Object',
+                                            'neutral': 'Go_To_Neutral',
+                                            'user_input': 'USER_INPUT'},
+                               remapping={'retry': 'retry',
+                                          'object_action': 'object_action',
+                                          'auto_continue': 'auto_continue',
+                                          'result_info': 'result_info'})
 
     # Create and start the introspection server
     sis = smach_ros.IntrospectionServer('small_objects_statemachine_introspection_server', sm, '/SM_ROOT')
