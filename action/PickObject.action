@@ -1,5 +1,5 @@
 # Define the goal
-string pick_object # object to pick
+string object_name # object to pick
 ---
 # Define the result
 string result_info

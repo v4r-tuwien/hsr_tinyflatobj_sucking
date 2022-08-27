@@ -21,7 +21,7 @@ roslib.load_manifest('hsr_small_objects')
 
 class FindObjectActionServer:
     def __init__(self):
-        self.server = actionlib.SimpleActionServer('Find_Object', FindObjectAction, self.execute, False)
+        self.server = actionlib.SimpleActionServer('Find_Object_Action_Server', FindObjectAction, self.execute, False)
         self.server.start()
 
         self.tfBuffer = tf2_ros.Buffer()
@@ -36,12 +36,16 @@ class FindObjectActionServer:
         # define result of action_sever
         result = FindObjectActionResult().result
 
-        self.detectron_start()
-        rospy.loginfo('Detectron started - waiting for detection')
-        rospy.sleep(1)
-        detections = rospy.wait_for_message('/detectron2_service/detections', DetectronDetections, timeout=10)
-        self.detectron_stop()
-        rospy.loginfo('Detection received - stopping detectron')
+        try:
+            self.detectron_start()
+            rospy.loginfo('Detectron started - waiting for detection')
+            rospy.sleep(1)
+            detections = rospy.wait_for_message('/detectron2_service/detections', DetectronDetections, timeout=10)
+            self.detectron_stop()
+            rospy.loginfo('Detection received - stopping detectron')
+        except Exception as e:
+            rospy.loginfo('Error with detectron occurred: ' + str(e))
+            self.server.set_aborted()
 
         chosen_object = DetectronDetection()
         if len(detections.detections) != 0:
@@ -56,7 +60,7 @@ class FindObjectActionServer:
 
         else:
             rospy.loginfo('No object found')
-            result.result_info = 'no_object_found'
+            result.result_info = 'not_found'
             self.server.set_succeeded(result)
             return
 
@@ -66,7 +70,7 @@ class FindObjectActionServer:
             for i in range(len(detections.detections)):
                 name = detections.detections[i].name
                 rospy.loginfo(name)
-            result.result_info = 'wrong_object_found'
+            result.result_info = 'not_found'
             self.server.set_succeeded(result)
             return
 
@@ -117,7 +121,7 @@ class FindObjectActionServer:
             found_object_pos.pose.orientation.z = hsr_pos.transform.rotation.z
             found_object_pos.pose.orientation.w = hsr_pos.transform.rotation.w
 
-            result.result_info = 'find_object_succeeded'
+            result.result_info = 'succeeded'
             self.server.set_succeeded(result)
 
             self.publish_frame(found_object_pos, goal.object_name)

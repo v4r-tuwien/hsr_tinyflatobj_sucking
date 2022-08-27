@@ -29,7 +29,7 @@ roslib.load_manifest('hsr_small_objects')
 class ExecuteSuctionActionServer:
     def __init__(self):
         # Prepare action server
-        self.server = actionlib.SimpleActionServer('Pick_Object', PickObjectAction, self.execute, False)
+        self.server = actionlib.SimpleActionServer('Pick_Object_Action_Server', PickObjectAction, self.execute, False)
         self.server.start()
 
         # Preparation for using the robot functions
@@ -83,23 +83,24 @@ class ExecuteSuctionActionServer:
         result = PickObjectActionResult().result
         # check if found_object frame is published
         try:
-            test = self.tfBuffer.lookup_transform('odom', 'found_object_' + goal.pick_object, rospy.Time(), rospy.Duration(4.0))
+            test = self.tfBuffer.lookup_transform('odom', 'found_object_' + goal.object_name, rospy.Time(), rospy.Duration(4.0))
         except Exception as e:
             if 'source_frame does not exist' in str(e):
-                result. result_info= 'goal_frame_missing'
+                result.result_info = 'goal_frame_missing'
             self.server.set_succeeded(result)
             return
 
         # Define the actual workspace as a 3x3x3 box with hsr in the middle
         hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
         self.move_group.set_workspace(
-           (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 + hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
+           (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 +
+            hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
 
         # Reset the collision object map
         self.clear_octomap()
         rospy.sleep(0.5)
 
-        print('Starting Moveit Commander')
+        rospy.loginfo('Starting Moveit Commander')
 
 
         # Distance between hsr hand and suction cup
@@ -109,10 +110,8 @@ class ExecuteSuctionActionServer:
             [hand2cup.transform.rotation.x, hand2cup.transform.rotation.y, hand2cup.transform.rotation.z,
              hand2cup.transform.rotation.w])
 
-
         pose_goal = geometry_msgs.msg.PoseStamped()
-        pose_goal.header.frame_id = 'found_object_' + goal.pick_object
-
+        pose_goal.header.frame_id = 'found_object_' + goal.object_name
 
         # hand2cup distance gets added to object position / therefore rotation around x-axis
         # z_offset from cup to object should be 0.1
@@ -121,7 +120,7 @@ class ExecuteSuctionActionServer:
         pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
                                       hand2cup.transform.translation.z)
         pose_goal.pose.position.z = 0.05 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
-                                           hand2cup.transform.translation.z)
+                                            hand2cup.transform.translation.z)
         pose_goal.pose.orientation.x = 0
         pose_goal.pose.orientation.y = 0
         pose_goal.pose.orientation.z = 0
@@ -144,33 +143,28 @@ class ExecuteSuctionActionServer:
         pose_goal.orientation.z = pose_goal_odom.pose.orientation.z
         pose_goal.orientation.w = pose_goal_odom.pose.orientation.w
 
-
         self.publish_goal(pose_goal)
         self.move_group.set_pose_target(pose_goal)
         moveit_success = self.move_group.go(wait=True)
         self.move_group.stop()
-        rospy.sleep(1)
+        rospy.sleep(0.5)
 
         if moveit_success:
             # set weights to make sure robot does not use base movement
             self.whole_body.linear_weight = 100.0
             self.whole_body.angular_weight = 100.0
             self.whole_body.end_effector_frame = u'hand_l_finger_vacuum_frame'
-            ###self.whole_body.move_end_effector_pose(geometry.pose(z= 0.2, ej=-pi), goal_frame)
             self.suction_cup.command(True)
             self.whole_body.move_end_effector_by_line((0, 0, 1), 0.05)
-            rospy.sleep(1)
+            # TODO: Check force sensor
+            rospy.sleep(0.25)
             self.whole_body.move_end_effector_by_line((0, 0, 1), -0.1)
 
-            # check force sensor
-            # rostopic echo /hsrb/wrist_wrench/compensated
-
-
-            result.result_info = 'pick_object_succeeded'
+            result.result_info = 'succeeded'
             self.server.set_succeeded(result)
 
         else:
-            result.result_info = 'moveit_failed'
+            result.result_info = 'movement_failed'
             self.server.set_succeeded(result)
 
 
@@ -196,7 +190,7 @@ class ExecuteSuctionActionServer:
         goal_frame.header.frame_id = 'odom'
         goal_frame.header.stamp = rospy.Time.now()
 
-        goal_frame.child_frame_id = 'suction_cup_goal_frame'
+        goal_frame.child_frame_id = 'moveit_goal_frame'
         goal_frame.transform.translation.x = pose_goal.position.x
         goal_frame.transform.translation.y = pose_goal.position.y
         goal_frame.transform.translation.z = pose_goal.position.z
@@ -211,7 +205,7 @@ class ExecuteSuctionActionServer:
 
 if __name__ == '__main__':
 
-    rospy.init_node('execute_suction_action_server')
+    rospy.init_node('pick_object_action_server')
     server = ExecuteSuctionActionServer()
     print('Execute_suction_action_server started')
     rospy.spin()

@@ -12,3 +12,4 @@ scripts/frames.pdf
 .idea/modules.xml
 .idea/vcs.xml
 .idea/workspace.xml
+scripts/__pycache__/small_objects_statemachine.cpython-38.pyc

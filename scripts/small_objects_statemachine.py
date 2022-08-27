@@ -10,13 +10,13 @@ import smach_ros
 
 #from actionlib_msgs.msg import GoalStatus
 
-#from handover.msg import HandoverAction
+from handover.msg import HandoverAction
 from hsrb_interface import Robot
-#from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 import roslib
 roslib.load_manifest('hsr_small_objects')
-from hsr_small_objects.msg import FindObjectAction, PickObjectAction
+from hsr_small_objects.msg import FindObjectAction, PickObjectAction, FindObjectGoal, PickObjectGoal
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
@@ -28,210 +28,195 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'wrist_flex_joint': -1.57,
                            'wrist_roll_joint': 0.0}
 
-# Enum for states
+
+def create_waypoint(x, y, q_z, q_w):
+    move_goal = MoveBaseGoal()
+    move_goal.target_pose.header.frame_id = 'map'
+    move_goal.target_pose.pose.position.x = x
+    move_goal.target_pose.pose.position.y = y
+    move_goal.target_pose.pose.orientation.z = q_z
+    move_goal.target_pose.pose.orientation.w = q_w
+    return move_goal
 
 
-class States(Enum):
-    FIND_OBJECT = 1
-    PICK_UP = 2
-    LAY_DOWN = 3
-    ACTIVATE_SUCTION = 4
-    DEACTIVATE_SUCTION = 5
-    RETURN_TO_NEUTRAL = 6
-    SETTINGS = 7
-    HELP = 8
-    QUIT = 9
+waypoint_1 = create_waypoint(0, -1, -0.707, 0.707)
+waypoint_2 = create_waypoint(1, -1.3, -0.9489846, 0.3153224)
+waypoints = [waypoint_1, waypoint_2]
+
+lay_down_point = create_waypoint(0.6, -0.4, 0, 0)
+handover_point = create_waypoint(0, 0, 0, 0)
 
 
-
-# Mapping of states to characters
-states_keys = {States.FIND_OBJECT: 'f',
-               States.PICK_UP: 'p',
-               States.LAY_DOWN: 'l',
-               States.ACTIVATE_SUCTION: 'a',
-               States.DEACTIVATE_SUCTION: 'd',
-               States.RETURN_TO_NEUTRAL: 'n',
-               States.SETTINGS: 's',
-               States.HELP: 'h',
-               States.QUIT: 'q'}
-
-
-class UserInput(smach.State):
-
-
+class MoveToNextWaypoint(smach.State):
     def __init__(self):
-        smach.State.__init__(self, outcomes=['finding', 'picking', 'laying', 'start_suction', 'stop_suction',
-                             'neutral', 'quit'],
-                             input_keys=['retry', 'object_action', 'object_name', 'auto_continue'],
-                             output_keys=['retry', 'object_action', 'object_name', 'auto_continue'])
-
+        smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached', 'no_more_waypoints'],
+                             input_keys=['waypoint_number'],
+                             output_keys=['waypoint_number'])
+        self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
 
     def execute(self, userdata):
-        rospy.loginfo('Executing state UserInput')
-
-        while not rospy.is_shutdown():
-            self.print_info()
-
-            while True:
-                user_input = input('CMD> ')
-                if len(user_input) == 1:
-                    break
-                print('Please enter only one character')
-            char_in = user_input.lower()
-
-            # Find Object
-            if char_in == states_keys[States.FIND_OBJECT]:
-                print('Finding object')
-                return 'finding'
-
-            # Picking up object
-            elif char_in == states_keys[States.PICK_UP]:
-                print('Picking up object')
-                # TODO: check find
-                return 'picking'
-
-            # Laying down object
-            elif char_in == states_keys[States.LAY_DOWN]:
-                print('Laying down object')
-                # TODO: check pickup
-                return 'laying'
-
-            # Start suction
-            elif char_in == states_keys[States.ACTIVATE_SUCTION]:
-                print('start_suction')
-                return 'start_suction'
-
-            # Stop suction
-            elif char_in == states_keys[States.DEACTIVATE_SUCTION]:
-                print('stop_suction')
-                return 'stop_suction'
-
-            # Return to neutral position
-            elif char_in == states_keys[States.RETURN_TO_NEUTRAL]:
-                print('Returning robot to neutral position')
-                return 'neutral'
-
-            # Settings
-            elif char_in == states_keys[States.SETTINGS]:
-                while not rospy.is_shutdown():
-                    print('Settings:')
-                    print('\t1 - Allow retries with base movement:\t\t' + str(userdata.retry))
-                    print('\t2 - Action after pick-up:\t\t\t' + str(userdata.object_action))
-                    print('\t3 - Change object, which should be found\t' + str(userdata.object_name))
-                    print('\t4 - Continue automatic with the next action\t' + str(userdata.auto_continue))
-                    print('')
-                    print('\t5 - Back')
-                    while True:
-                        user_input = input('CMD> ')
-                        if len(user_input) == 1:
-                            break
-                        print('Please enter only one character')
-                    char_in = user_input.lower()
-                    if char_in == '1':
-                        if userdata.retry:
-                            userdata.retry = False
-                        else:
-                            userdata.retry = True
-                    elif char_in == '2':
-                        if userdata.object_action == 'handover':
-                            userdata.object_action = 'lay_down'
-                        elif userdata.object_action == 'lay_down':
-                            userdata.object_action = 'nothing'
-                        else:
-                            userdata.object_action = 'handover'
-                    elif char_in == '3':
-                        if userdata.object_name == 'card':
-                            userdata.object_name = 'nix'
-                        else:
-                            userdata.object_name = 'card'
-                    elif char_in == '4':
-                        if userdata.auto_continue:
-                            userdata.auto_continue = False
-                        else:
-                            userdata.auto_continue = True
-                    elif char_in == '5':
-                        break
-                    else:
-                        print('No valid option.')
-
-            # Help
-            elif char_in is None or char_in == states_keys[States.HELP]:
-                print('\n\n\tFind_Object - HSR uses RGB and depth image to find and localize known flat objects.')
-
-            # Quit
-            elif char_in is None or char_in == states_keys[States.QUIT]:
-                print('Tschau')
-                return 'quit'
-
-            # Unrecognized command
-            else:
-                print('Command not known, please give other command')
-
-    def print_info(self):
-        """ prints states_keys and their names
-        e.g.:
-        states_keys = {States.EXAMPLE: 'a',
-                    States.ANOTHER_ONE: 'b'}
-        output:
-               a - EXAMPLE
-               b - ANOTHER_ONE
-                ...
-        """
-        for name, member in States.__members__.items():
-            print(states_keys[member] + ' - ' + name)
-
-
-
-class LayObject(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Object abgelegt')
-        return 'succeeded'
-
-class StartSuction(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-        self.robot = Robot()
-        self.suction = self.robot.try_get('suction')
-
-    def execute(self, userdata):
-        print(50*'#' + '\n')
-        if self.suction != None:
-            rospy.loginfo('Starting suction')
-            self.suction.command(True)
-        else:
-            rospy.loginfo('Could not start suction, is hsr connection established?')
-        print(50*'#' + '\n')
-        return 'succeeded'
-
-class StopSuction(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-        self.robot = Robot()
-        self.suction = self.robot.try_get('suction')
-
-    def execute(self, userdata):
-        print(50*'#' + '\n')
-        if self.suction != None:
-            rospy.loginfo('Stopping suction')
-            self.suction.command(False)
-        else:
-            rospy.loginfo('Could not stop suction, is hsr connection established?')
         print(50 * '#' + '\n')
+        if userdata.waypoint_number == len(waypoints):
+            rospy.loginfo('No more waypoints')
+            out = 'no_more_waypoints'
+        else:
+            self.move_client.wait_for_server(rospy.Duration(10.0))
+            self.move_client.send_goal(waypoints[userdata.waypoint_number])
+            result = self.move_client.wait_for_result(rospy.Duration(15.0))
+            userdata.waypoint_number += 1
+            if result:
+                rospy.loginfo('Waypoint reached')
+                out = 'succeeded'
+            else:
+                rospy.loginfo('Waypoint not reached')
+                out = 'waypoint_not_reached'
+        print('\n' + 50 * '#')
+        return out
+
+
+class FindObject(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded', 'not_found', 'server_problem'],
+                             input_keys=['object_name'])
+        self.client = actionlib.SimpleActionClient('Find_Object_Action_Server', FindObjectAction)
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        goal = FindObjectGoal(object_name=userdata.object_name)
+        self.client.wait_for_server(rospy.Duration(8.0))
+        self.client.send_goal(goal)
+        self.client.wait_for_result(rospy.Duration(8.0))
+        find_result = self.client.get_result()
+        if find_result.result_info == 'not found':
+            rospy.loginfo('Object ' + str(userdata.object_name) + ' was not found')
+            out = 'not_found'
+        elif find_result.result_info == 'succeeded':
+            rospy.loginfo('Found object ' + str(userdata.object_name))
+            out = 'succeeded'
+        else:
+            rospy.loginfo('find_object_action_server problem')
+            out = 'server_problem'
+        print('\n' + 50 * '#')
+        return out
+
+
+class PickObject(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded', 'movement_aborted', 'no_path_found', 'server_problem'],
+                             input_keys=['object_name'])
+        self.client = actionlib.SimpleActionClient('Pick_Object_Action_Server', PickObjectAction)
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        goal = PickObjectGoal(object_name=userdata.object_name)
+        self.client.send_goal(goal)
+        self.client.wait_for_result(rospy.Duration(20.0))
+        pick_result = self.client.get_result()
+        if pick_result.result_info == 'succeeded':
+            rospy.loginfo('Picked object ' + str(userdata.object_name))
+            out = 'succeeded'
+        elif pick_result.result_info == 'movement_aborted':
+            rospy.loginfo('Movement failed during execution')
+            out = 'movement_aborted'
+        elif pick_result.result_info == 'no_path_found':
+            rospy.loginfo('No path was found from actual waypoint')
+            out = 'no_path_found'
+            # TODO: no path checken
+        else:
+            rospy.loginfo('pick_object_action_server problem')
+            out = 'server_problem'
+        print('\n' + 50 * '#')
+        return out
+
+
+class CheckPick(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded', 'no_object_picked', 'robot_problem'])
+        self.robot = Robot()
+        self.suction = self.robot.try_get('suction')
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        if self.suction != None:
+            check = self.suction.pressure_sensor
+            if check:
+                rospy.loginfo('Pick was successful')
+                out = 'succeeded'
+            else:
+                rospy.loginfo('Object was not picked')
+                out = 'no_object_picked'
+        else:
+            rospy.loginfo('Could find suction cup, is hsr connection established?')
+            out = 'robot_problem'
+        print('\n' + 50 * '#')
+        return out
+
+
+class MoveToDropPoint(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['hand_over_object', 'lay_down_object', 'drop_point_not_reached'],
+                             input_keys=['object_action'])
+        self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        if userdata.object_action == 'handover':
+            out = 'hand_over_object'
+            goal = handover_point
+        else:
+            out = 'lay_down_object'
+            goal = lay_down_point
+        self.move_client.wait_for_server(rospy.Duration(10.0))
+        self.move_client.send_goal(goal)
+        result = self.move_client.wait_for_result(rospy.Duration(15.0))
+        if result:
+            rospy.loginfo('Drop point reached')
+        else:
+            rospy.loginfo('Drop point not reached')
+            out = 'drop_point_not_reached'
+        print('\n' + 50 * '#')
+        return out
+
+
+class LayDown(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded'])
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        rospy.loginfo('Info')
+        print('\n' + 50 * '#')
         return 'succeeded'
+
+
+class Handover(smach.State):
+
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded'])
+        # TODO: Handover machen
+
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        rospy.loginfo('Info')
+        print('\n' + 50 * '#')
+        return 'succeeded'
+
 
 class GoToNeutral(smach.State):
 
     def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
+        smach.State.__init__(self, outcomes=['succeeded', 'robot_problem'])
         self.robot = Robot()
-        self.whole_body = self.robot.try_get('whole_body')
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -242,139 +227,98 @@ class GoToNeutral(smach.State):
             vel = self.whole_body.joint_velocities
             while all(abs(i) > 0.05 for i in vel.values()):
                 vel = self.whole_body.joint_velocities
-            rospy.sleep(2)
+            rospy.sleep(1)
+            out = 'succeeded'
+
         else:
             rospy.loginfo('Could not return to neutral, is hsr connection established?')
-        print(50 * '#' + '\n')
-        return 'succeeded'
-
-class Quit(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self):
-        rospy.loginfo('Info')
-        print('Abschalten')
-        return 'succeeded'
-
-class NextStep(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['finding', 'picking', 'laying', 'neutral', 'user_input'],
-                             input_keys=['retry', 'object_action', 'auto_continue', 'result_info'])
-
-    def execute(self, userdata):
-        print(50*'#' + '\n')
-        rospy.loginfo('Planning next step')
-        out = 'user_input'
-
-        if userdata.result_info == 'find_object_succeeded':
-            if userdata.auto_continue == True:
-                out = 'picking'
-            else:
-                out = 'user_input'
-
-        if userdata.result_info == 'pick_object_succeeded':
-            if userdata.auto_continue == True:
-                if userdata.object_action == 'lay_down':
-                    out = 'laying'
-                elif userdata.object_action == 'handover':
-                    out = 'handover'
-                else:
-                    out = 'user_input'
-            else:
-                out = 'user_input'
-
-        print(50 * '#' + '\n')
+            out = 'robot_problem'
+        print('\n' + 50 * '#')
         return out
 
 
-def main():
-    rospy.init_node('small_objects_statemachine')
+class MoveToLastWaypoint(smach.State):
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached'],
+                             input_keys=['waypoint_number'])
+        self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
 
-    sm = smach.StateMachine(outcomes=['end'])
+    def execute(self, userdata):
+        print(50 * '#' + '\n')
+        self.move_client.wait_for_server(rospy.Duration(10.0))
+        self.move_client.send_goal(waypoints[userdata.waypoint_number-1])
+        result = self.move_client.wait_for_result(rospy.Duration(15.0))
+        if result:
+            rospy.loginfo('Waypoint reached')
+            out = 'succeeded'
+        else:
+            rospy.loginfo('Waypoint not reached')
+            out = 'waypoint_not_reached'
+        print('\n' + 50 * '#')
+        return out
+
+
+def create_small_objects_sm():
+
+    sm = smach.StateMachine(outcomes=['Exit'])
 
     # define some userdata
-    sm.userdata.retry = True
     sm.userdata.object_action = 'handover'
     sm.userdata.object_name = 'card'
-    sm.userdata.auto_continue = False
-    sm.userdata.result_info = ''
+    sm.userdata.waypoint_number = 0
 
     with sm:
-        smach.StateMachine.add('USER_INPUT',
-                               UserInput(),
-                               transitions={'finding': 'Find_Object',
-                                            'picking': 'Pick_Object',
-                                            'laying': 'Lay_Object',
-                                            'start_suction': 'Start_Suction',
-                                            'stop_suction': 'Stop_Suction',
-                                            'neutral': 'Go_To_Neutral',
-                                            'quit': 'end'},
-                               remapping={'retry': 'retry',
-                                          'object_action': 'object_action',
-                                          'object_name': 'object_name'})
+
+        smach.StateMachine.add('Move_To_Next_Waypoint',
+                               MoveToNextWaypoint(),
+                               transitions={'succeeded': 'Find_Object',
+                                            'no_more_waypoints': 'Exit',
+                                            'waypoint_not_reached': 'Move_To_Next_Waypoint'},
+                               remapping={'waypoint_number': 'waypoint_number'})
 
         smach.StateMachine.add('Find_Object',
-                               smach_ros.SimpleActionState('Find_Object', FindObjectAction,
-                                                           goal_slots=['object_name'],
-                                                           result_slots=['result_info'],),
-                               transitions={'succeeded': 'Next_Step',
-                                            'preempted': 'USER_INPUT',
-                                            'aborted': 'USER_INPUT'},
-                               remapping={'object_name': 'object_name',
-                                          'result_info': 'result_info'})
+                               FindObject(),
+                               transitions={'succeeded': 'Pick_Object',
+                                            'server_problem': 'Exit',
+                                            'not_found': 'Move_To_Next_Waypoint'},
+                               remapping={'object_name': 'object_name'})
 
         smach.StateMachine.add('Pick_Object',
-                               smach_ros.SimpleActionState('Pick_Object', PickObjectAction,
-                                                           goal_slots=['pick_object'],
-                                                           result_slots=['result_info'],),
-                               transitions={'succeeded': 'Next_Step',
-                                            'preempted': 'USER_INPUT',
-                                            'aborted': 'USER_INPUT'},
-                               remapping={'pick_object': 'object_name',
-                                          'result_info': 'result_info'})
+                               PickObject(),
+                               transitions={'succeeded': 'Check_Pick',
+                                            'server_problem': 'Exit',
+                                            'movement_aborted': 'Go_To_Neutral',
+                                            'no_path_found': 'Move_To_Next_Waypoint'},
+                               remapping={'object_name': 'object_name'})
 
-        smach.StateMachine.add('Lay_Object',
-                               LayObject(),
-                               transitions={'succeeded': 'USER_INPUT'})
+        smach.StateMachine.add('Check_Pick',
+                               CheckPick(),
+                               transitions={'succeeded': 'Move_To_Drop_Point',
+                                            'no_object_picked': 'Move_To_Last_Waypoint',
+                                            'robot_problem': 'Exit'})
 
-        smach.StateMachine.add('Start_Suction',
-                               StartSuction(),
-                               transitions={'succeeded': 'USER_INPUT'})
+        smach.StateMachine.add('Move_To_Drop_Point',
+                               LayDown(),
+                               transitions={'lay_down_object': 'Lay_Down',
+                                            'hand_over_object': 'Handover',
+                                            'drop_point_not_reached': 'Exit'},
+                               remapping={'object_action': 'object_action'})
 
-        smach.StateMachine.add('Stop_Suction',
-                               StopSuction(),
-                               transitions={'succeeded': 'USER_INPUT'})
+        smach.StateMachine.add('Lay_Down',
+                               LayDown(),
+                               transitions={'succeeded': 'Exit'})
+
+        smach.StateMachine.add('Handover',
+                               Handover(),
+                               transitions={'succeeded': 'Exit'})
 
         smach.StateMachine.add('Go_To_Neutral',
                                GoToNeutral(),
-                               transitions={'succeeded': 'USER_INPUT'})
+                               transitions={'succeeded': 'Pick_Object',
+                                            'robot_problem': 'Exit'})
 
-        smach.StateMachine.add('Next_Step',
-                               NextStep(),
-                               transitions={'finding': 'Find_Object',
-                                            'picking': 'Pick_Object',
-                                            'laying': 'Lay_Object',
-                                            'neutral': 'Go_To_Neutral',
-                                            'user_input': 'USER_INPUT'},
-                               remapping={'retry': 'retry',
-                                          'object_action': 'object_action',
-                                          'auto_continue': 'auto_continue',
-                                          'result_info': 'result_info'})
-
-    # Create and start the introspection server
-    sis = smach_ros.IntrospectionServer('small_objects_statemachine_introspection_server', sm, '/SM_ROOT')
-    sis.start()
-
-    # Execute state machine
-    outcome = sm.execute()
-
-    # Wait for ctrl-c to stop the application
-    # rospy.spin()
-    sis.stop()
-
-
-if __name__ == '__main__':
-    main()
+        smach.StateMachine.add('Move_To_Last_Waypoint',
+                               MoveToLastWaypoint(),
+                               transitions={'succeeded': 'Pick_Object',
+                                            'waypoint_not_reached': 'Move_To_Next_Waypoint'})
+    return sm

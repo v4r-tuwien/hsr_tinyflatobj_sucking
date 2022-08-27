@@ -14,8 +14,8 @@ tmux send-keys "rosrun hsr_small_objects find_object_action_server.py" C-m
 tmux select-pane -t 1
 tmux send-keys "rosrun hsr_small_objects pick_object_action_server.py" C-m
 tmux select-pane -t 0
-tmux send-keys "rosrun hsr_small_objects small_objects_statemachine.py" C-m
-tmux rename-window 'statemachine'
+tmux send-keys "rosrun hsr_small_objects user_input.py" C-m
+tmux rename-window 'User Interface'
 
 # Attach to session
 tmux attach-session -t $SESSION
