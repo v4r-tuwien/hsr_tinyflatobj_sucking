@@ -19,7 +19,7 @@ sensor_msgs)
 
 
 add_action_files(DIRECTORY action 
-FILES FindObject.action PickObject.action)
+FILES FindObject.action ArmMovement.action)
 
 generate_messages(DEPENDENCIES 
 actionlib_msgs

@@ -13,3 +13,10 @@ scripts/frames.pdf
 .idea/vcs.xml
 .idea/workspace.xml
 scripts/__pycache__/small_objects_statemachine.cpython-38.pyc
+scripts/tests/execute_grasp.py
+scripts/tests/execute_suction_action.py
+scripts/tests/found_object_broadcaster.py
+scripts/tests/hsr_test.py
+scripts/tests/listener.py
+scripts/tests/talker.py
+scripts/tests/tf2_broadcaster.py

@@ -8,7 +8,6 @@ import rospy
 import smach
 import smach_ros
 
-#from actionlib_msgs.msg import GoalStatus
 
 from handover.msg import HandoverAction
 from hsrb_interface import Robot
@@ -16,7 +15,8 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 import roslib
 roslib.load_manifest('hsr_small_objects')
-from hsr_small_objects.msg import FindObjectAction, PickObjectAction, FindObjectGoal, PickObjectGoal
+from hsr_small_objects.msg import FindObjectAction, FindObjectGoal, ArmMovementAction, ArmMovementGoal
+
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
@@ -29,40 +29,23 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'wrist_roll_joint': 0.0}
 
 
-def create_waypoint(x, y, q_z, q_w):
-    move_goal = MoveBaseGoal()
-    move_goal.target_pose.header.frame_id = 'map'
-    move_goal.target_pose.pose.position.x = x
-    move_goal.target_pose.pose.position.y = y
-    move_goal.target_pose.pose.orientation.z = q_z
-    move_goal.target_pose.pose.orientation.w = q_w
-    return move_goal
-
-
-waypoint_1 = create_waypoint(0, -1, -0.707, 0.707)
-waypoint_2 = create_waypoint(1, -1.3, -0.9489846, 0.3153224)
-waypoints = [waypoint_1, waypoint_2]
-
-lay_down_point = create_waypoint(0.6, -0.4, 0, 0)
-handover_point = create_waypoint(0, 0, 0, 0)
-
 
 class MoveToNextWaypoint(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached', 'no_more_waypoints'],
-                             input_keys=['waypoint_number'],
+                             input_keys=['waypoint_number', 'map'],
                              output_keys=['waypoint_number'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
-        if userdata.waypoint_number == len(waypoints):
+        if userdata.waypoint_number == len(userdata.map.waypoints):
             rospy.loginfo('No more waypoints')
             out = 'no_more_waypoints'
         else:
             self.move_client.wait_for_server(rospy.Duration(10.0))
-            self.move_client.send_goal(waypoints[userdata.waypoint_number])
-            result = self.move_client.wait_for_result(rospy.Duration(15.0))
+            self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number])
+            result = self.move_client.wait_for_result(rospy.Duration(20.0))
             userdata.waypoint_number += 1
             if result:
                 rospy.loginfo('Waypoint reached')
@@ -95,7 +78,7 @@ class FindObject(smach.State):
             rospy.loginfo('Found object ' + str(userdata.object_name))
             out = 'succeeded'
         else:
-            rospy.loginfo('find_object_action_server problem')
+            rospy.loginfo('Find_Object_Action_Server problem')
             out = 'server_problem'
         print('\n' + 50 * '#')
         return out
@@ -106,11 +89,11 @@ class PickObject(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'movement_aborted', 'no_path_found', 'server_problem'],
                              input_keys=['object_name'])
-        self.client = actionlib.SimpleActionClient('Pick_Object_Action_Server', PickObjectAction)
+        self.client = actionlib.SimpleActionClient('Arm_Movement_Action_Server', ArmMovementAction)
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
-        goal = PickObjectGoal(object_name=userdata.object_name)
+        goal = ArmMovementGoal(userdata.object_name)
         self.client.send_goal(goal)
         self.client.wait_for_result(rospy.Duration(20.0))
         pick_result = self.client.get_result()
@@ -125,7 +108,7 @@ class PickObject(smach.State):
             out = 'no_path_found'
             # TODO: no path checken
         else:
-            rospy.loginfo('pick_object_action_server problem')
+            rospy.loginfo('Arm_Movement_Action_Server problem')
             out = 'server_problem'
         print('\n' + 50 * '#')
         return out
@@ -159,20 +142,20 @@ class MoveToDropPoint(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['hand_over_object', 'lay_down_object', 'drop_point_not_reached'],
-                             input_keys=['object_action'])
+                             input_keys=['object_action', 'map'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
         if userdata.object_action == 'handover':
             out = 'hand_over_object'
-            goal = handover_point
+            goal = userdata.map.handover_point
         else:
             out = 'lay_down_object'
-            goal = lay_down_point
+            goal = userdata.map.lay_down_point
         self.move_client.wait_for_server(rospy.Duration(10.0))
         self.move_client.send_goal(goal)
-        result = self.move_client.wait_for_result(rospy.Duration(15.0))
+        result = self.move_client.wait_for_result(rospy.Duration(20.0))
         if result:
             rospy.loginfo('Drop point reached')
         else:
@@ -185,13 +168,23 @@ class MoveToDropPoint(smach.State):
 class LayDown(smach.State):
 
     def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
+        smach.State.__init__(self, outcomes=['succeeded', 'server_problem'])
+        self.client = actionlib.SimpleActionClient('Arm_Movement_Action_Server', ArmMovementAction)
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
-        rospy.loginfo('Info')
+        goal = ArmMovementGoal('lay_down')
+        self.client.send_goal(goal)
+        self.client.wait_for_result(rospy.Duration(20.0))
+        lay_down_result = self.client.get_result()
+        if lay_down_result.result_info == 'succeeded':
+            rospy.loginfo('Picked object ' + str(userdata.object_name))
+            out = 'succeeded'
+        else:
+            rospy.loginfo('Arm_Movement_Action_Server problem')
+            out = 'server_problem'
         print('\n' + 50 * '#')
-        return 'succeeded'
+        return out
 
 
 class Handover(smach.State):
@@ -234,20 +227,22 @@ class GoToNeutral(smach.State):
             rospy.loginfo('Could not return to neutral, is hsr connection established?')
             out = 'robot_problem'
         print('\n' + 50 * '#')
+        # TODO: Neutral mit Moveit
         return out
 
 
 class MoveToLastWaypoint(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached'],
-                             input_keys=['waypoint_number'])
+                             input_keys=['waypoint_number', 'map'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
+        # TODO: Go to neutral during movement
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
         self.move_client.wait_for_server(rospy.Duration(10.0))
-        self.move_client.send_goal(waypoints[userdata.waypoint_number-1])
-        result = self.move_client.wait_for_result(rospy.Duration(15.0))
+        self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number-1])
+        result = self.move_client.wait_for_result(rospy.Duration(20.0))
         if result:
             rospy.loginfo('Waypoint reached')
             out = 'succeeded'
@@ -258,14 +253,15 @@ class MoveToLastWaypoint(smach.State):
         return out
 
 
-def create_small_objects_sm():
+def create_small_objects_sm(userdata_object_action, userdata_object_name, userdata_map):
 
     sm = smach.StateMachine(outcomes=['Exit'])
 
     # define some userdata
-    sm.userdata.object_action = 'handover'
-    sm.userdata.object_name = 'card'
+    sm.userdata.object_action = userdata_object_action
+    sm.userdata.object_name = userdata_object_name
     sm.userdata.waypoint_number = 0
+    sm.userdata.map = userdata_map
 
     with sm:
 
@@ -298,7 +294,7 @@ def create_small_objects_sm():
                                             'robot_problem': 'Exit'})
 
         smach.StateMachine.add('Move_To_Drop_Point',
-                               LayDown(),
+                               MoveToDropPoint(),
                                transitions={'lay_down_object': 'Lay_Down',
                                             'hand_over_object': 'Handover',
                                             'drop_point_not_reached': 'Exit'},
@@ -306,7 +302,8 @@ def create_small_objects_sm():
 
         smach.StateMachine.add('Lay_Down',
                                LayDown(),
-                               transitions={'succeeded': 'Exit'})
+                               transitions={'succeeded': 'Exit',
+                                            'server_problem': 'Exit'})
 
         smach.StateMachine.add('Handover',
                                Handover(),

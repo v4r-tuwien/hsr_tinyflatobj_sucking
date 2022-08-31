@@ -16,8 +16,9 @@ from hsrb_interface import Robot
 
 import roslib
 roslib.load_manifest('hsr_small_objects')
-from hsr_small_objects.msg import FindObjectAction, PickObjectAction
+from hsr_small_objects.msg import FindObjectAction, ArmMovementAction, ArmMovementGoal
 import small_objects_statemachine
+import maps
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
@@ -30,8 +31,6 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'wrist_roll_joint': 0.0}
 
 # Enum for states
-
-
 class States(Enum):
     START_STATEMACHINE = 1
     FIND_OBJECT = 2
@@ -40,9 +39,10 @@ class States(Enum):
     ACTIVATE_SUCTION = 5
     DEACTIVATE_SUCTION = 6
     RETURN_TO_NEUTRAL = 7
-    SETTINGS = 8
-    HELP = 9
-    QUIT = 10
+    MAP_SETTINGS = 8
+    SETTINGS = 9
+    HELP = 10
+    QUIT = 11
 
 
 # Mapping of states to characters
@@ -53,9 +53,13 @@ states_keys = {States.START_STATEMACHINE: 's',
                States.ACTIVATE_SUCTION: 'a',
                States.DEACTIVATE_SUCTION: 'd',
                States.RETURN_TO_NEUTRAL: 'n',
+               States.MAP_SETTINGS: 'm',
                States.SETTINGS: 'c',
                States.HELP: 'h',
                States.QUIT: 'q'}
+
+# Load waypoints
+[gazebo_tu_room, tu_room, custom_1, custom_2] = maps.create_and_load_maps()
 
 
 class UserInput(smach.State):
@@ -64,9 +68,11 @@ class UserInput(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['statemachine', 'finding', 'picking', 'laying', 'start_suction',
                                              'stop_suction', 'neutral', 'quit'],
-                             input_keys=['object_action', 'object_name'],
-                             output_keys=['object_action', 'object_name'])
+                             input_keys=['object_action', 'object_name', 'map'],
+                             output_keys=['object_action', 'object_name', 'map'])
 
+        self.hsr_position = maps.Position()  # for adding waypoints
+        self.point_publisher = maps.PointPublisher()  # for publishing points
 
     def execute(self, userdata):
         rospy.loginfo('Executing state UserInput')
@@ -109,13 +115,72 @@ class UserInput(smach.State):
                 print('Returning robot to neutral position')
                 return 'neutral'
 
+            elif char_in == states_keys[States.MAP_SETTINGS]:
+                while not rospy.is_shutdown():
+                    print('Map Settings:')
+                    print('\t1 - Change map: \t' + str(userdata.map))
+                    print('\t2 - Add position as waypoint')
+                    print('\t3 - Set position as handover_point')
+                    print('\t4 - Set position as lay_down_point')
+                    print('\t5 - Save points')
+                    print('\t6 - Publish point markers')
+                    print('\t7 - Delete all waypoints for map')
+                    print('')
+                    print('\t8 - Back')
+                    while True:
+                        user_input = input('CMD> ')
+                        if len(user_input) == 1:
+                            break
+                        print('Please enter only one character')
+                    char_in = user_input.lower()
+                    if char_in == '1':
+                        if userdata.map == gazebo_tu_room:
+                            userdata.map = tu_room
+                        elif userdata.map == tu_room:
+                            userdata.map = custom_1
+                        elif userdata.map == custom_1:
+                            userdata.map = custom_2
+                        else:
+                            userdata.map = gazebo_tu_room
+                    elif char_in == '2':
+                        pos = self.hsr_position.get_robot_position()
+                        userdata.map.add_waypoint(pos)
+                        print('Position: ' + str(pos))
+                        print('was added as waypoint')
+                    elif char_in == '3':
+                        pos = self.hsr_position.get_robot_position()
+                        userdata.map.set_handover_point(pos)
+                        print('Position: ' + str(pos))
+                        print('was added as handover_point')
+                    elif char_in == '4':
+                        pos = self.hsr_position.get_robot_position()
+                        userdata.map.set_lay_down_point(pos)
+                        print('Position: ' + str(pos))
+                        print('was added as lay_down_point')
+                    elif char_in == '5':
+                        maps.save_map(userdata.map)
+                        print('Map: ' + str(userdata.map) + ' was saved')
+                    elif char_in == '6':
+                        self.point_publisher.publish_points(userdata.map)
+                        print('Publishing points as markers')
+                        print('Red - Waypoint / Green - Lay_Down_Point / Blue - Handover_Point')
+                    elif char_in == '7':
+                        userdata.map.delete_points()
+                        print('Points deleted')
+
+                    elif char_in == '8':
+                        break
+                    else:
+                        print('No valid option.')
+
             elif char_in == states_keys[States.SETTINGS]:
                 while not rospy.is_shutdown():
                     print('Settings:')
                     print('\t1 - Action after pick-up:\t\t\t' + str(userdata.object_action))
                     print('\t2 - Change object, which should be found\t' + str(userdata.object_name))
+                    print('\t3 - Change map for correct waypoints:\t\t' + str(userdata.map))
                     print('')
-                    print('\t3 - Back')
+                    print('\t4 - Back')
                     while True:
                         user_input = input('CMD> ')
                         if len(user_input) == 1:
@@ -135,6 +200,13 @@ class UserInput(smach.State):
                         else:
                             userdata.object_name = 'card'
                     elif char_in == '3':
+                        if userdata.map == 'tu':
+                            userdata.map = 'gazebo_tu_room'
+                        elif userdata.map == 'gazebo_tu_room':
+                            userdata.map = 'custom'
+                        else:
+                            userdata.map = 'tu'
+                    elif char_in == '4':
                         break
                     else:
                         print('No valid option.')
@@ -254,10 +326,13 @@ def main():
     sm = smach.StateMachine(outcomes=['end'])
 
     # define some userdata
-    sm.userdata.object_action = 'handover'
+    sm.userdata.object_action = 'lay_down'
     sm.userdata.object_name = 'card'
+    sm.userdata.map = gazebo_tu_room
 
-    small_objects_sm = small_objects_statemachine.create_small_objects_sm()
+    small_objects_sm = small_objects_statemachine.create_small_objects_sm(sm.userdata.object_action,
+                                                                          sm.userdata.object_name, sm.userdata.map)
+
 
     with sm:
         smach.StateMachine.add('USER_INPUT',
@@ -271,11 +346,15 @@ def main():
                                             'neutral': 'Go_To_Neutral',
                                             'quit': 'end'},
                                remapping={'object_action': 'object_action',
-                                          'object_name': 'object_name'})
+                                          'object_name': 'object_name',
+                                          'map': 'map'})
 
         smach.StateMachine.add('small_objects_sm',
                                small_objects_sm,
-                               transitions={'Exit': 'USER_INPUT'})
+                               transitions={'Exit': 'USER_INPUT'},
+                               remapping={'map': 'map',
+                                          'object_action': 'object_action',
+                                          'object_name': 'object_name'})
 
         smach.StateMachine.add('Only_Find_Object',
                                smach_ros.SimpleActionState('Find_Object_Action_Server', FindObjectAction,
@@ -286,16 +365,19 @@ def main():
                                remapping={'object_name': 'object_name'})
 
         smach.StateMachine.add('Only_Pick_Object',
-                               smach_ros.SimpleActionState('Pick_Object_Action_Server', PickObjectAction,
-                                                           goal_slots=['object_name']),
+                               smach_ros.SimpleActionState('Arm_Movement_Action_Server', ArmMovementAction,
+                                                           goal_slots=['command']),
                                transitions={'succeeded': 'USER_INPUT',
                                             'preempted': 'USER_INPUT',
                                             'aborted': 'USER_INPUT'},
-                               remapping={'object_name': 'object_name'})
+                               remapping={'command': 'object_name'})
 
         smach.StateMachine.add('Only_Lay_Object',
-                               LayObject(),
-                               transitions={'succeeded': 'USER_INPUT'})
+                               smach_ros.SimpleActionState('Arm_Movement_Action_Server', ArmMovementAction,
+                                                           goal=ArmMovementGoal('lay_down')),
+                               transitions={'succeeded': 'USER_INPUT',
+                                            'preempted': 'USER_INPUT',
+                                            'aborted': 'USER_INPUT'})
 
         smach.StateMachine.add('Start_Suction',
                                StartSuction(),

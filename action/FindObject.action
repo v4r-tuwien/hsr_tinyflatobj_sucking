@@ -5,4 +5,3 @@ string object_name # which object should be found
 string result_info
 ---
 # Define a feedback message
-float32 percent_complete

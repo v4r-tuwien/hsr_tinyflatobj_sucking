@@ -1,8 +1,7 @@
 # Define the goal
-string object_name # object to pick
+string command # command info could be: pick_card, lay_down
 ---
 # Define the result
 string result_info
 ---
 # Define a feedback message
-float32 percent_complete
