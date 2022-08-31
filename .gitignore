@@ -20,3 +20,4 @@ scripts/tests/hsr_test.py
 scripts/tests/listener.py
 scripts/tests/talker.py
 scripts/tests/tf2_broadcaster.py
+__pycache__/
