@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (C) 2016 Toyota Motor Corporation
+
 from enum import Enum
 from math import pi
 
@@ -18,7 +18,7 @@ import roslib
 roslib.load_manifest('hsr_small_objects')
 from hsr_small_objects.msg import FindObjectAction, ArmMovementAction, ArmMovementGoal
 import small_objects_statemachine
-import maps
+import waypoint_maps
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
@@ -59,7 +59,7 @@ states_keys = {States.START_STATEMACHINE: 's',
                States.QUIT: 'q'}
 
 # Load waypoints
-[gazebo_tu_room, tu_room, custom_1, custom_2] = maps.create_and_load_maps()
+[gazebo_tu_room, tu_room, custom_1, custom_2] = waypoint_maps.create_and_load_maps()
 
 
 class UserInput(smach.State):
@@ -71,8 +71,8 @@ class UserInput(smach.State):
                              input_keys=['object_action', 'object_name', 'map'],
                              output_keys=['object_action', 'object_name', 'map'])
 
-        self.hsr_position = maps.Position()  # for adding waypoints
-        self.point_publisher = maps.PointPublisher()  # for publishing points
+        self.hsr_position = waypoint_maps.Position()  # for adding waypoints
+        self.point_publisher = waypoint_maps.PointPublisher()  # for publishing points
 
     def execute(self, userdata):
         rospy.loginfo('Executing state UserInput')
@@ -158,7 +158,7 @@ class UserInput(smach.State):
                         print('Position: ' + str(pos))
                         print('was added as lay_down_point')
                     elif char_in == '5':
-                        maps.save_map(userdata.map)
+                        waypoint_maps.save_map(userdata.map)
                         print('Map: ' + str(userdata.map) + ' was saved')
                     elif char_in == '6':
                         self.point_publisher.publish_points(userdata.map)
@@ -200,12 +200,14 @@ class UserInput(smach.State):
                         else:
                             userdata.object_name = 'card'
                     elif char_in == '3':
-                        if userdata.map == 'tu':
-                            userdata.map = 'gazebo_tu_room'
-                        elif userdata.map == 'gazebo_tu_room':
-                            userdata.map = 'custom'
+                        if userdata.map == gazebo_tu_room:
+                            userdata.map = tu_room
+                        elif userdata.map == tu_room:
+                            userdata.map = custom_1
+                        elif userdata.map == custom_1:
+                            userdata.map = custom_2
                         else:
-                            userdata.map = 'tu'
+                            userdata.map = gazebo_tu_room
                     elif char_in == '4':
                         break
                     else:
@@ -328,7 +330,7 @@ def main():
     # define some userdata
     sm.userdata.object_action = 'lay_down'
     sm.userdata.object_name = 'card'
-    sm.userdata.map = gazebo_tu_room
+    sm.userdata.map = tu_room
 
     small_objects_sm = small_objects_statemachine.create_small_objects_sm(sm.userdata.object_action,
                                                                           sm.userdata.object_name, sm.userdata.map)

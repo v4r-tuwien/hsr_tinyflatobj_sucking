@@ -35,12 +35,9 @@ catkin_package(
 #  DEPENDS system_lib
 )
 
-
-
-
-catkin_install_python(PROGRAMS scripts/talker.py scripts/listener.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+#catkin_install_python(PROGRAMS scripts/arm_movement_action_server.py scripts/find_object_action_server.py #scripts/small_objects_statemachine.py scripts/user_input.py
+#  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+#)
 
 
 

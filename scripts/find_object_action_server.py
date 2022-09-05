@@ -40,12 +40,14 @@ class FindObjectActionServer:
             self.detectron_start()
             rospy.loginfo('Detectron started - waiting for detection')
             rospy.sleep(1)
-            detections = rospy.wait_for_message('/detectron2_service/detections', DetectronDetections, timeout=10)
+            detections = rospy.wait_for_message('/detectron2_service/detections', DetectronDetections, timeout=20)
             self.detectron_stop()
             rospy.loginfo('Detection received - stopping detectron')
         except Exception as e:
             rospy.loginfo('Error with detectron occurred: ' + str(e))
-            self.server.set_aborted()
+            result.result_info = 'Detectron error'
+            self.server.set_succeeded(result)
+            return
 
         chosen_object = DetectronDetection()
         if len(detections.detections) != 0:
@@ -97,8 +99,10 @@ class FindObjectActionServer:
             try:
                 hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(6.0))
             except Exception as e:
-                rospy.logerr('TF2 transform error:' + str(e))
-
+                rospy.loginfo('TF2 transform error:' + str(e))
+                result.result_info = 'robot_problem'
+                self.server.set_succeeded(result)
+                return
 
             # object_dist = distance from hsr base_link to the object position
             depth_point = geometry_msgs.msg.PointStamped()
@@ -121,11 +125,9 @@ class FindObjectActionServer:
             found_object_pos.pose.orientation.z = hsr_pos.transform.rotation.z
             found_object_pos.pose.orientation.w = hsr_pos.transform.rotation.w
 
+            self.publish_frame(found_object_pos, goal.object_name)
             result.result_info = 'succeeded'
             self.server.set_succeeded(result)
-
-            self.publish_frame(found_object_pos, goal.object_name)
-
 
     def publish_frame(self, pose_stamped, frame_name):
         self.broadcaster = tf2_ros.StaticTransformBroadcaster()
@@ -145,6 +147,7 @@ class FindObjectActionServer:
         goal_frame.transform.rotation.w = pose_stamped.pose.orientation.w
 
         self.broadcaster.sendTransform(goal_frame)
+
 
 if __name__ == '__main__':
 

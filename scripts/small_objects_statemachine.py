@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-# Copyright (C) 2016 Toyota Motor Corporation
+#!/usr/bin/env python
+
 from enum import Enum
 from math import pi
 
@@ -29,13 +29,15 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'wrist_roll_joint': 0.0}
 
 
-
 class MoveToNextWaypoint(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached', 'no_more_waypoints'],
                              input_keys=['waypoint_number', 'map'],
                              output_keys=['waypoint_number'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
+        self.hsr_pos_x = -1000
+        self.hsr_pos_y = -1000
+        # TODO: gace to point
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -43,9 +45,13 @@ class MoveToNextWaypoint(smach.State):
             rospy.loginfo('No more waypoints')
             out = 'no_more_waypoints'
         else:
-            self.move_client.wait_for_server(rospy.Duration(10.0))
-            self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number])
-            result = self.move_client.wait_for_result(rospy.Duration(20.0))
+            server_check = self.move_client.wait_for_server(rospy.Duration(10.0))
+            if not server_check:
+                rospy.loginfo('move_base server not active')
+                return 'no_more_waypoints'
+            self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number],
+                    feedback_cb=self.callback_feedback)
+            result = self.move_client.wait_for_result(rospy.Duration(40.0))
             userdata.waypoint_number += 1
             if result:
                 rospy.loginfo('Waypoint reached')
@@ -55,6 +61,16 @@ class MoveToNextWaypoint(smach.State):
                 out = 'waypoint_not_reached'
         print('\n' + 50 * '#')
         return out
+
+    def callback_feedback(self, feedback):
+        pass
+        #if self.hsr_pos_x == round(feedback.base_position.pose.position.x, 3):
+        #    if self.hsr_pos_y == round(feedback.base_position.pose.position.y, 3):
+        #        rospy.loginfo('Waypoint not reached')
+        #        # TODO: cancel move_base goal
+        #self.hsr_pos_x = round(feedback.base_position.pose.position.x, 2)
+        #self.hsr_pos_y = round(feedback.base_position.pose.position.y, 2)
+
 
 
 class FindObject(smach.State):
@@ -67,11 +83,13 @@ class FindObject(smach.State):
     def execute(self, userdata):
         print(50 * '#' + '\n')
         goal = FindObjectGoal(object_name=userdata.object_name)
-        self.client.wait_for_server(rospy.Duration(8.0))
+        self.client.wait_for_server(rospy.Duration(15.0))
         self.client.send_goal(goal)
-        self.client.wait_for_result(rospy.Duration(8.0))
+        self.client.wait_for_result(rospy.Duration(25.0))
         find_result = self.client.get_result()
-        if find_result.result_info == 'not found':
+        if find_result is None:
+            return 'server_problem'
+        if find_result.result_info == 'not_found':
             rospy.loginfo('Object ' + str(userdata.object_name) + ' was not found')
             out = 'not_found'
         elif find_result.result_info == 'succeeded':
@@ -95,8 +113,10 @@ class PickObject(smach.State):
         print(50 * '#' + '\n')
         goal = ArmMovementGoal(userdata.object_name)
         self.client.send_goal(goal)
-        self.client.wait_for_result(rospy.Duration(20.0))
+        self.client.wait_for_result(rospy.Duration(25.0))
         pick_result = self.client.get_result()
+        if pick_result is None:
+            return 'server_problem'
         if pick_result.result_info == 'succeeded':
             rospy.loginfo('Picked object ' + str(userdata.object_name))
             out = 'succeeded'
@@ -106,7 +126,6 @@ class PickObject(smach.State):
         elif pick_result.result_info == 'no_path_found':
             rospy.loginfo('No path was found from actual waypoint')
             out = 'no_path_found'
-            # TODO: no path checken
         else:
             rospy.loginfo('Arm_Movement_Action_Server problem')
             out = 'server_problem'
@@ -144,9 +163,31 @@ class MoveToDropPoint(smach.State):
         smach.State.__init__(self, outcomes=['hand_over_object', 'lay_down_object', 'drop_point_not_reached'],
                              input_keys=['object_action', 'map'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
+        # go to neutral position
+        if self.whole_body != None:
+            rospy.loginfo('Returning to neutral position')
+            self.whole_body.move_to_joint_positions(neutral_joint_positions)
+            rospy.sleep(1.0)
+            vel = self.whole_body.joint_velocities
+            while all(abs(i) > 0.05 for i in vel.values()):
+                vel = self.whole_body.joint_velocities
+            rospy.sleep(1)
+            out = 'succeeded'
+
+        else:
+            rospy.loginfo('Could not return to neutral, is hsr connection established?')
+            return 'drop_point_not_reached'
+
+        # go to drop point
         if userdata.object_action == 'handover':
             out = 'hand_over_object'
             goal = userdata.map.handover_point
@@ -175,7 +216,7 @@ class LayDown(smach.State):
         print(50 * '#' + '\n')
         goal = ArmMovementGoal('lay_down')
         self.client.send_goal(goal)
-        self.client.wait_for_result(rospy.Duration(20.0))
+        self.client.wait_for_result(rospy.Duration(25.0))
         lay_down_result = self.client.get_result()
         if lay_down_result.result_info == 'succeeded':
             rospy.loginfo('Picked object ' + str(userdata.object_name))
@@ -233,10 +274,15 @@ class GoToNeutral(smach.State):
 
 class MoveToLastWaypoint(smach.State):
     def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached'],
+        smach.State.__init__(self, outcomes=['succeeded', 'waypoint_not_reached', 'robot_problem'],
                              input_keys=['waypoint_number', 'map'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
-        # TODO: Go to neutral during movement
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -245,7 +291,18 @@ class MoveToLastWaypoint(smach.State):
         result = self.move_client.wait_for_result(rospy.Duration(20.0))
         if result:
             rospy.loginfo('Waypoint reached')
-            out = 'succeeded'
+            if self.whole_body != None:
+                rospy.loginfo('Returning to neutral position')
+                self.whole_body.move_to_joint_positions(neutral_joint_positions)
+                rospy.sleep(1.0)
+                vel = self.whole_body.joint_velocities
+                while all(abs(i) > 0.05 for i in vel.values()):
+                    vel = self.whole_body.joint_velocities
+                rospy.sleep(1)
+                out = 'succeeded'
+            else:
+                rospy.loginfo('Could not return to neutral, is hsr connection established?')
+                out = 'robot_problem'
         else:
             rospy.loginfo('Waypoint not reached')
             out = 'waypoint_not_reached'
@@ -317,5 +374,6 @@ def create_small_objects_sm(userdata_object_action, userdata_object_name, userda
         smach.StateMachine.add('Move_To_Last_Waypoint',
                                MoveToLastWaypoint(),
                                transitions={'succeeded': 'Pick_Object',
-                                            'waypoint_not_reached': 'Move_To_Next_Waypoint'})
+                                            'waypoint_not_reached': 'Move_To_Next_Waypoint',
+                                            'robot_problem': 'Exit'})
     return sm
