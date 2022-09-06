@@ -17,6 +17,7 @@ from hsrb_interface import Robot
 import roslib
 roslib.load_manifest('hsr_small_objects')
 from hsr_small_objects.msg import FindObjectAction, ArmMovementAction, ArmMovementGoal
+from handover.msg import HandoverAction
 import small_objects_statemachine
 import waypoint_maps
 
@@ -30,6 +31,7 @@ neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'wrist_flex_joint': -1.57,
                            'wrist_roll_joint': 0.0}
 
+
 # Enum for states
 class States(Enum):
     START_STATEMACHINE = 1
@@ -39,10 +41,11 @@ class States(Enum):
     ACTIVATE_SUCTION = 5
     DEACTIVATE_SUCTION = 6
     RETURN_TO_NEUTRAL = 7
-    MAP_SETTINGS = 8
-    SETTINGS = 9
-    HELP = 10
-    QUIT = 11
+    HANDOVER = 8
+    MAP_SETTINGS = 9
+    SETTINGS = 10
+    INFO = 11
+    QUIT = 12
 
 
 # Mapping of states to characters
@@ -53,9 +56,10 @@ states_keys = {States.START_STATEMACHINE: 's',
                States.ACTIVATE_SUCTION: 'a',
                States.DEACTIVATE_SUCTION: 'd',
                States.RETURN_TO_NEUTRAL: 'n',
+               States.HANDOVER: 'h',
                States.MAP_SETTINGS: 'm',
                States.SETTINGS: 'c',
-               States.HELP: 'h',
+               States.INFO: 'i',
                States.QUIT: 'q'}
 
 # Load waypoints
@@ -67,7 +71,7 @@ class UserInput(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['statemachine', 'finding', 'picking', 'laying', 'start_suction',
-                                             'stop_suction', 'neutral', 'quit'],
+                                             'stop_suction', 'neutral', 'handover', 'quit'],
                              input_keys=['object_action', 'object_name', 'map'],
                              output_keys=['object_action', 'object_name', 'map'])
 
@@ -81,7 +85,7 @@ class UserInput(smach.State):
             self.print_info()
 
             while True:
-                user_input = input('CMD> ')
+                user_input = input('\nCMD> ')
                 if len(user_input) == 1:
                     break
                 print('Please enter only one character')
@@ -104,31 +108,35 @@ class UserInput(smach.State):
                 return 'laying'
 
             elif char_in == states_keys[States.ACTIVATE_SUCTION]:
-                print('start_suction')
+                print('Starting suction cup')
                 return 'start_suction'
 
             elif char_in == states_keys[States.DEACTIVATE_SUCTION]:
-                print('stop_suction')
+                print('Stopping suction cup')
                 return 'stop_suction'
 
             elif char_in == states_keys[States.RETURN_TO_NEUTRAL]:
-                print('Returning robot to neutral position')
+                print('Returning to neutral position')
                 return 'neutral'
+
+            elif char_in == states_keys[States.HANDOVER]:
+                print('Going to handover position')
+                return 'handover'
 
             elif char_in == states_keys[States.MAP_SETTINGS]:
                 while not rospy.is_shutdown():
-                    print('Map Settings:')
-                    print('\t1 - Change map: \t' + str(userdata.map))
-                    print('\t2 - Add position as waypoint')
-                    print('\t3 - Set position as handover_point')
-                    print('\t4 - Set position as lay_down_point')
-                    print('\t5 - Save points')
-                    print('\t6 - Publish point markers')
-                    print('\t7 - Delete all waypoints for map')
+                    print('\nMap Settings:\n')
+                    print('1 - Change map: \t' + str(userdata.map))
+                    print('2 - Add position as waypoint')
+                    print('3 - Set position as handover_point')
+                    print('4 - Set position as lay_down_point')
+                    print('5 - Save points')
+                    print('6 - Publish point markers')
+                    print('7 - Delete all waypoints for map')
                     print('')
-                    print('\t8 - Back')
+                    print('8 - Back')
                     while True:
-                        user_input = input('CMD> ')
+                        user_input = input('\nCMD> ')
                         if len(user_input) == 1:
                             break
                         print('Please enter only one character')
@@ -175,14 +183,15 @@ class UserInput(smach.State):
 
             elif char_in == states_keys[States.SETTINGS]:
                 while not rospy.is_shutdown():
-                    print('Settings:')
-                    print('\t1 - Action after pick-up:\t\t\t' + str(userdata.object_action))
-                    print('\t2 - Change object, which should be found\t' + str(userdata.object_name))
-                    print('\t3 - Change map for correct waypoints:\t\t' + str(userdata.map))
+                    print('\nSettings:\n')
+                    print('1 - After pick-up:\t' + str(userdata.object_action))
+                    print('2 - Find object:\t' + str(userdata.object_name))
+                    print('3 - Waypoint map:\t' + str(userdata.map))
+                    # TODO: Save settings
                     print('')
-                    print('\t4 - Back')
+                    print('4 - Back')
                     while True:
-                        user_input = input('CMD> ')
+                        user_input = input('\nCMD> ')
                         if len(user_input) == 1:
                             break
                         print('Please enter only one character')
@@ -213,11 +222,11 @@ class UserInput(smach.State):
                     else:
                         print('No valid option.')
 
-            elif char_in is None or char_in == states_keys[States.HELP]:
+            elif char_in is None or char_in == states_keys[States.INFO]:
                 print('\n\n\tFind_Object - HSR uses RGB and depth image to find and localize known flat objects.')
 
             elif char_in is None or char_in == states_keys[States.QUIT]:
-                print('Tschau')
+                print('\nTschau')
                 return 'quit'
 
             # Unrecognized command
@@ -239,17 +248,6 @@ class UserInput(smach.State):
             print(states_keys[member] + ' - ' + name)
 
 
-
-class LayObject(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Object abgelegt')
-        return 'succeeded'
-
 class StartSuction(smach.State):
 
     def __init__(self):
@@ -267,6 +265,7 @@ class StartSuction(smach.State):
         print('\n' + 50*'#' + '\n')
         return 'succeeded'
 
+
 class StopSuction(smach.State):
 
     def __init__(self):
@@ -283,6 +282,7 @@ class StopSuction(smach.State):
             rospy.loginfo('Could not stop suction, is hsr connection established?')
         print('\n' + 50 * '#' + '\n')
         return 'succeeded'
+
 
 class GoToNeutral(smach.State):
 
@@ -310,17 +310,6 @@ class GoToNeutral(smach.State):
         print('\n' + 50 * '#' + '\n')
         return 'succeeded'
 
-class Quit(smach.State):
-
-    def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
-
-    def execute(self, userdata):
-        rospy.loginfo('Info')
-        print('Abschalten')
-        return 'succeeded'
-
-
 
 def main():
     rospy.init_node('small_objects_statemachine')
@@ -332,8 +321,7 @@ def main():
     sm.userdata.object_name = 'card'
     sm.userdata.map = tu_room
 
-    small_objects_sm = small_objects_statemachine.create_small_objects_sm(sm.userdata.object_action,
-                                                                          sm.userdata.object_name, sm.userdata.map)
+    small_objects_sm = small_objects_statemachine.create_small_objects_sm()
 
 
     with sm:
@@ -346,6 +334,7 @@ def main():
                                             'start_suction': 'Start_Suction',
                                             'stop_suction': 'Stop_Suction',
                                             'neutral': 'Go_To_Neutral',
+                                            'handover': 'Handover',
                                             'quit': 'end'},
                                remapping={'object_action': 'object_action',
                                           'object_name': 'object_name',
@@ -353,7 +342,8 @@ def main():
 
         smach.StateMachine.add('small_objects_sm',
                                small_objects_sm,
-                               transitions={'Exit': 'USER_INPUT'},
+                               transitions={'Exit': 'USER_INPUT',
+                                            'Exit_successful': 'USER_INPUT'},
                                remapping={'map': 'map',
                                           'object_action': 'object_action',
                                           'object_name': 'object_name'})
@@ -392,6 +382,11 @@ def main():
         smach.StateMachine.add('Go_To_Neutral',
                                GoToNeutral(),
                                transitions={'succeeded': 'USER_INPUT'})
+
+        smach.StateMachine.add('Handover', smach_ros.SimpleActionState('/handover', HandoverAction),
+                               transitions={'succeeded': 'USER_INPUT',
+                                            'preempted': 'USER_INPUT',
+                                            'aborted': 'USER_INPUT'})
 
 
 

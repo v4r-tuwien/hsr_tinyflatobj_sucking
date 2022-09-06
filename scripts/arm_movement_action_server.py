@@ -22,6 +22,12 @@ import actionlib
 import roslib
 roslib.load_manifest('hsr_small_objects')
 
+from table_plane_extractor.srv import TablePlaneExtractor
+from table_plane_extractor.msg import Plane
+import open3d as o3d
+from open3d_ros_helper import open3d_ros_helper as orh
+from sensor_msgs.msg import PointCloud2
+import copy
 
 
 class ArmMovementActionServer:
@@ -45,7 +51,6 @@ class ArmMovementActionServer:
         self.move_group = self.moveit_init()
         # For resetting the collision map
         self.clear_octomap = rospy.ServiceProxy('/clear_octomap', Empty)
-
 
     def moveit_init(self):
         """ Initializes MoveIt, sets workspace and creates collision environment
@@ -73,8 +78,26 @@ class ArmMovementActionServer:
 
         return move_group
 
-
     def execute(self, goal):
+        # add table as collision object on the ground
+        coll_objects = self.get_table_collision_object()
+        table_count = 0
+        for coll_object in coll_objects:
+            table_count = table_count + 1
+            rospy.loginfo('table_' + str(table_count) + ' added as collision object')
+            self.add_box('table_' + str(table_count), coll_object.center[0], coll_object.center[1],
+                         coll_object.center[2], coll_object.extent[0], coll_object.extent[1], coll_object.extent[2])
+
+        # Define the actual workspace as a 3x3x3 box with hsr in the middle
+        hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
+        self.move_group.set_workspace(
+            (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 +
+             hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
+
+        # Reset the collision object map
+        self.clear_octomap()
+        rospy.sleep(1)
+
         if 'lay_down' == goal.command:
             rospy.loginfo('Execute lay_down')
             self.lay_down()
@@ -94,17 +117,6 @@ class ArmMovementActionServer:
                 rospy.loginfo('goal_frame_missing')
             self.server.set_succeeded(result)
             return
-
-        # Define the actual workspace as a 3x3x3 box with hsr in the middle
-        hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
-        self.move_group.set_workspace(
-           (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 +
-            hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
-
-        # Reset the collision object map
-        self.clear_octomap()
-        rospy.sleep(1)
-
 
         # Distance between hsr hand and suction cup
         hand2cup = self.tfBuffer.lookup_transform('hand_palm_link', 'hand_l_finger_vacuum_frame', rospy.Time(),
@@ -198,18 +210,8 @@ class ArmMovementActionServer:
             self.server.set_succeeded(result)
             return
 
-        # Define the actual workspace as a 3x3x3 box with hsr in the middle
-        hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
-        self.move_group.set_workspace(
-            (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 +
-             hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
-
-        # Reset the collision object map
-        self.clear_octomap()
-        rospy.sleep(0.5)
-
         box = geometry_msgs.msg.TransformStamped()
-        #box.header.frame_id = 'ar_marker/508'
+        # box.header.frame_id = 'ar_marker/508'
         box.header.frame_id = 'ar_marker/720'
         box.header.stamp = rospy.Time.now()
         box.child_frame_id = 'storage_box'
@@ -293,7 +295,6 @@ class ArmMovementActionServer:
             self.server.set_succeeded(result)
             return
 
-    # TODO: add table position function
     def add_box(self, name='floor', position_x=0.0, position_y=0.0,
                 position_z=-0.07, size_x=10, size_y=10, size_z=0.1):
         # Creates a flat box under the robot to represent the floor
@@ -308,7 +309,6 @@ class ArmMovementActionServer:
         box_pose.pose.position.z = position_z
         box_name = name
         self.scene.add_box(box_name, box_pose, size=(size_x, size_y, size_z))
-
 
     def publish_pose(self, pose_frame):
 
@@ -328,6 +328,37 @@ class ArmMovementActionServer:
 
         self.broadcaster.sendTransform(transform_frame)
 
+    def get_table_collision_object(self):
+        topic = '/hsrb/head_rgbd_sensor/depth_registered/rectified_points'
+        rospy.wait_for_service('/test/table_plane_extractor')
+        bb_list = []
+
+        try:
+            table_extractor = rospy.ServiceProxy('/test/table_plane_extractor', TablePlaneExtractor)
+            response = table_extractor(topic)
+            for pcd in response.clouds:
+                cloud = orh.rospc_to_o3dpc(pcd)
+                bb_cloud = cloud.get_oriented_bounding_box()
+
+                if bb_cloud.center[2] < 0.2:
+                    continue
+
+                bb_cloud.color = (0, 1, 0)
+                bb_cloud_mod = copy.deepcopy(bb_cloud)
+                bb_cloud_mod.color = (0, 0, 1)
+
+                bb_cloud_mod.center = (bb_cloud_mod.center[0], bb_cloud_mod.center[1], (bb_cloud_mod.center[2] + (bb_cloud_mod.extent[2] / 2)) / 2)
+                bb_cloud_mod.extent = (bb_cloud_mod.extent[0]+0.04, bb_cloud_mod.extent[1]+0.04, bb_cloud.center[2] + (bb_cloud_mod.extent[2] / 2))
+
+                bb_list.append(bb_cloud_mod)
+                #print(bb_cloud_mod.center)
+                #print(bb_cloud_mod.extent)
+                #o3d.visualization.draw_geometries([cloud, bb_cloud, bb_cloud_mod])
+
+        except rospy.ServiceException as e:
+            print(e)
+
+        return bb_list
 
 if __name__ == '__main__':
 

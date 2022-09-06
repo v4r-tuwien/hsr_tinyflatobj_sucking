@@ -10,13 +10,13 @@ import smach_ros
 
 
 from handover.msg import HandoverAction
-from hsrb_interface import Robot
+from hsrb_interface import Robot, geometry
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 
 import roslib
 roslib.load_manifest('hsr_small_objects')
 from hsr_small_objects.msg import FindObjectAction, FindObjectGoal, ArmMovementAction, ArmMovementGoal
-
+from handover.msg import HandoverAction
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
@@ -35,9 +35,15 @@ class MoveToNextWaypoint(smach.State):
                              input_keys=['waypoint_number', 'map'],
                              output_keys=['waypoint_number'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
-        self.hsr_pos_x = -1000
-        self.hsr_pos_y = -1000
-        # TODO: gace to point
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
+
+        # self.hsr_pos_x = -1000
+        # self.hsr_pos_y = -1000
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -50,12 +56,16 @@ class MoveToNextWaypoint(smach.State):
                 rospy.loginfo('move_base server not active')
                 return 'no_more_waypoints'
             self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number],
-                    feedback_cb=self.callback_feedback)
+                                       feedback_cb=self.callback_feedback)
             result = self.move_client.wait_for_result(rospy.Duration(40.0))
             userdata.waypoint_number += 1
             if result:
                 rospy.loginfo('Waypoint reached')
                 out = 'succeeded'
+                if self.whole_body is not None:
+                    self.whole_body.gaze_point(point=geometry.Vector3(x=1.0, y=0.0, z=0.5), ref_frame_id='base_link')
+                else:
+                    rospy.loginfo('Could not gaze at point, is hsr connection established?')
             else:
                 rospy.loginfo('Waypoint not reached')
                 out = 'waypoint_not_reached'
@@ -63,14 +73,13 @@ class MoveToNextWaypoint(smach.State):
         return out
 
     def callback_feedback(self, feedback):
+        # TODO: cancel move_base goal
         pass
         #if self.hsr_pos_x == round(feedback.base_position.pose.position.x, 3):
         #    if self.hsr_pos_y == round(feedback.base_position.pose.position.y, 3):
         #        rospy.loginfo('Waypoint not reached')
-        #        # TODO: cancel move_base goal
         #self.hsr_pos_x = round(feedback.base_position.pose.position.x, 2)
         #self.hsr_pos_y = round(feedback.base_position.pose.position.y, 2)
-
 
 
 class FindObject(smach.State):
@@ -90,6 +99,7 @@ class FindObject(smach.State):
         if find_result is None:
             return 'server_problem'
         if find_result.result_info == 'not_found':
+            # TODO: anderer gaze point
             rospy.loginfo('Object ' + str(userdata.object_name) + ' was not found')
             out = 'not_found'
         elif find_result.result_info == 'succeeded':
@@ -166,37 +176,41 @@ class MoveToDropPoint(smach.State):
         self.robot = Robot()
         try:
             self.whole_body = self.robot.try_get('whole_body')
+            self.omni_base = self.robot.try_get('omni_base')
         except Exception as e:
             rospy.loginfo('Problem finding: ' + str(e))
             self.whole_body = None
+            self.omni_base = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
         # go to neutral position
-        if self.whole_body != None:
+        if self.whole_body is not None and self.omni_base is not None:
             rospy.loginfo('Returning to neutral position')
+            self.omni_base.go_rel(-0.15, 0.0, 0.0, 20.0)
+            rospy.sleep(0.5)
             self.whole_body.move_to_joint_positions(neutral_joint_positions)
             rospy.sleep(1.0)
             vel = self.whole_body.joint_velocities
             while all(abs(i) > 0.05 for i in vel.values()):
                 vel = self.whole_body.joint_velocities
             rospy.sleep(1)
-            out = 'succeeded'
-
         else:
             rospy.loginfo('Could not return to neutral, is hsr connection established?')
             return 'drop_point_not_reached'
 
         # go to drop point
+        rospy.loginfo('Going to drop point')
         if userdata.object_action == 'handover':
             out = 'hand_over_object'
             goal = userdata.map.handover_point
         else:
             out = 'lay_down_object'
             goal = userdata.map.lay_down_point
+
         self.move_client.wait_for_server(rospy.Duration(10.0))
         self.move_client.send_goal(goal)
-        result = self.move_client.wait_for_result(rospy.Duration(20.0))
+        result = self.move_client.wait_for_result(rospy.Duration(25.0))
         if result:
             rospy.loginfo('Drop point reached')
         else:
@@ -232,7 +246,7 @@ class Handover(smach.State):
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded'])
-        # TODO: Handover machen
+        # TODO: Handover wegen suction cup Pumpe checken
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -254,7 +268,7 @@ class GoToNeutral(smach.State):
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
-        if self.whole_body != None:
+        if self.whole_body is not None:
             rospy.loginfo('Returning to neutral position')
             self.whole_body.move_to_joint_positions(neutral_joint_positions)
             rospy.sleep(1.0)
@@ -268,7 +282,6 @@ class GoToNeutral(smach.State):
             rospy.loginfo('Could not return to neutral, is hsr connection established?')
             out = 'robot_problem'
         print('\n' + 50 * '#')
-        # TODO: Neutral mit Moveit
         return out
 
 
@@ -280,29 +293,37 @@ class MoveToLastWaypoint(smach.State):
         self.robot = Robot()
         try:
             self.whole_body = self.robot.try_get('whole_body')
+            self.omni_base = self.robot.try_get('omni_base')
         except Exception as e:
             rospy.loginfo('Problem finding: ' + str(e))
             self.whole_body = None
+            self.omni_base = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
+
+        # go to neutral position
+        if self.whole_body is not None and self.omni_base is not None:
+            rospy.loginfo('Returning to neutral position')
+            self.omni_base.go_rel(-0.15, 0.0, 0.0, 20.0)
+            rospy.sleep(0.5)
+            self.whole_body.move_to_joint_positions(neutral_joint_positions)
+            rospy.sleep(1.0)
+            vel = self.whole_body.joint_velocities
+            while all(abs(i) > 0.05 for i in vel.values()):
+                vel = self.whole_body.joint_velocities
+            rospy.sleep(1)
+        else:
+            rospy.loginfo('Could not return to neutral, is hsr connection established?')
+            return 'robot_problem'
+
+        # move to last waypoint
         self.move_client.wait_for_server(rospy.Duration(10.0))
         self.move_client.send_goal(userdata.map.waypoints[userdata.waypoint_number-1])
-        result = self.move_client.wait_for_result(rospy.Duration(20.0))
+        result = self.move_client.wait_for_result(rospy.Duration(25.0))
         if result:
             rospy.loginfo('Waypoint reached')
-            if self.whole_body != None:
-                rospy.loginfo('Returning to neutral position')
-                self.whole_body.move_to_joint_positions(neutral_joint_positions)
-                rospy.sleep(1.0)
-                vel = self.whole_body.joint_velocities
-                while all(abs(i) > 0.05 for i in vel.values()):
-                    vel = self.whole_body.joint_velocities
-                rospy.sleep(1)
-                out = 'succeeded'
-            else:
-                rospy.loginfo('Could not return to neutral, is hsr connection established?')
-                out = 'robot_problem'
+            out = 'succeeded'
         else:
             rospy.loginfo('Waypoint not reached')
             out = 'waypoint_not_reached'
@@ -310,15 +331,12 @@ class MoveToLastWaypoint(smach.State):
         return out
 
 
-def create_small_objects_sm(userdata_object_action, userdata_object_name, userdata_map):
+def create_small_objects_sm():
 
-    sm = smach.StateMachine(outcomes=['Exit'])
+    sm = smach.StateMachine(outcomes=['Exit', 'Exit_successful'], input_keys=['object_action', 'object_name', 'map'])
 
     # define some userdata
-    sm.userdata.object_action = userdata_object_action
-    sm.userdata.object_name = userdata_object_name
     sm.userdata.waypoint_number = 0
-    sm.userdata.map = userdata_map
 
     with sm:
 
@@ -359,12 +377,13 @@ def create_small_objects_sm(userdata_object_action, userdata_object_name, userda
 
         smach.StateMachine.add('Lay_Down',
                                LayDown(),
-                               transitions={'succeeded': 'Exit',
+                               transitions={'succeeded': 'Exit_successful',
                                             'server_problem': 'Exit'})
 
-        smach.StateMachine.add('Handover',
-                               Handover(),
-                               transitions={'succeeded': 'Exit'})
+        smach.StateMachine.add('Handover', smach_ros.SimpleActionState('/handover', HandoverAction),
+                               transitions={'succeeded': 'Exit_successful',
+                                            'preempted': 'Exit',
+                                            'aborted': 'Exit'})
 
         smach.StateMachine.add('Go_To_Neutral',
                                GoToNeutral(),
