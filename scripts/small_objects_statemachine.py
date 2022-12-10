@@ -16,15 +16,15 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 import roslib
 roslib.load_manifest('hsr_small_objects')
 from hsr_small_objects.msg import FindObjectAction, FindObjectGoal, ArmMovementAction, ArmMovementGoal
-from handover.msg import HandoverAction
+from handover.msg import HandoverAction, HandoverGoal
 
 # neutral joint positions
 neutral_joint_positions = {'arm_flex_joint': 0.0,
                            'arm_lift_joint': 0.0,
                            'arm_roll_joint': -1.570,
-                           'hand_motor_joint': 1.0,
+                           'hand_motor_joint': 0.3,
                            'head_pan_joint': 0.0,
-                           'head_tilt_joint': -0.75,
+                           'head_tilt_joint': -0.5,
                            'wrist_flex_joint': -1.57,
                            'wrist_roll_joint': 0.0}
 
@@ -88,6 +88,12 @@ class FindObject(smach.State):
         smach.State.__init__(self, outcomes=['succeeded', 'not_found', 'server_problem'],
                              input_keys=['object_name'])
         self.client = actionlib.SimpleActionClient('Find_Object_Action_Server', FindObjectAction)
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -97,12 +103,19 @@ class FindObject(smach.State):
         self.client.wait_for_result(rospy.Duration(25.0))
         find_result = self.client.get_result()
         if find_result is None:
+            rospy.loginfo('FindObject_Action_Server gave no result')
             return 'server_problem'
         if find_result.result_info == 'not_found':
-            # TODO: anderer gaze point
-            rospy.loginfo('Object ' + str(userdata.object_name) + ' was not found')
-            out = 'not_found'
-        elif find_result.result_info == 'succeeded':
+            if self.whole_body is not None:
+                self.whole_body.gaze_point(point=geometry.Vector3(x=1.0, y=0.0, z=0.3), ref_frame_id='base_link')
+                self.client.wait_for_server(rospy.Duration(15.0))
+                self.client.send_goal(goal)
+                self.client.wait_for_result(rospy.Duration(25.0))
+                find_result = self.client.get_result()
+                if find_result.result_info == 'not_found':
+                    rospy.loginfo('Object ' + str(userdata.object_name) + ' was not found')
+                    return 'not_found'
+        if find_result.result_info == 'succeeded':
             rospy.loginfo('Found object ' + str(userdata.object_name))
             out = 'succeeded'
         else:
@@ -123,10 +136,14 @@ class PickObject(smach.State):
         print(50 * '#' + '\n')
         goal = ArmMovementGoal(userdata.object_name)
         self.client.send_goal(goal)
-        self.client.wait_for_result(rospy.Duration(25.0))
+        self.client.wait_for_result(rospy.Duration(50.0))
         pick_result = self.client.get_result()
         if pick_result is None:
-            return 'server_problem'
+            rospy.sleep(1.0) # sometimes the action_server needs a delay
+            pick_result = self.client.get_result()
+            if pick_result is None:
+                rospy.loginfo('Arm_Movement_Action_Server gave no result')
+                return 'server_problem'
         if pick_result.result_info == 'succeeded':
             rospy.loginfo('Picked object ' + str(userdata.object_name))
             out = 'succeeded'
@@ -170,7 +187,8 @@ class CheckPick(smach.State):
 class MoveToDropPoint(smach.State):
 
     def __init__(self):
-        smach.State.__init__(self, outcomes=['hand_over_object', 'lay_down_object', 'drop_point_not_reached'],
+        smach.State.__init__(self, outcomes=['hand_over_object', 'lay_down_object', 'drop_point_not_reached',
+                                             'no_object_action'],
                              input_keys=['object_action', 'map'])
         self.move_client = actionlib.SimpleActionClient('/move_base/move', MoveBaseAction)
         self.robot = Robot()
@@ -199,25 +217,30 @@ class MoveToDropPoint(smach.State):
             rospy.loginfo('Could not return to neutral, is hsr connection established?')
             return 'drop_point_not_reached'
 
-        # go to drop point
-        rospy.loginfo('Going to drop point')
-        if userdata.object_action == 'handover':
-            out = 'hand_over_object'
-            goal = userdata.map.handover_point
+        # if robot should do nothing with object
+        if userdata.object_action == 'nothing':
+            rospy.loginfo('No object action to execute')
+            return 'no_object_action'
         else:
-            out = 'lay_down_object'
-            goal = userdata.map.lay_down_point
+            # go to drop point
+            rospy.loginfo('Going to drop point')
+            if userdata.object_action == 'handover':
+                out = 'hand_over_object'
+                goal = userdata.map.handover_point
+            else:
+                out = 'lay_down_object'
+                goal = userdata.map.lay_down_point
 
-        self.move_client.wait_for_server(rospy.Duration(10.0))
-        self.move_client.send_goal(goal)
-        result = self.move_client.wait_for_result(rospy.Duration(25.0))
-        if result:
-            rospy.loginfo('Drop point reached')
-        else:
-            rospy.loginfo('Drop point not reached')
-            out = 'drop_point_not_reached'
-        print('\n' + 50 * '#')
-        return out
+            self.move_client.wait_for_server(rospy.Duration(10.0))
+            self.move_client.send_goal(goal)
+            result = self.move_client.wait_for_result(rospy.Duration(25.0))
+            if result:
+                rospy.loginfo('Drop point reached')
+            else:
+                rospy.loginfo('Drop point not reached')
+                out = 'drop_point_not_reached'
+            print('\n' + 50 * '#')
+            return out
 
 
 class LayDown(smach.State):
@@ -225,6 +248,12 @@ class LayDown(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'server_problem'])
         self.client = actionlib.SimpleActionClient('Arm_Movement_Action_Server', ArmMovementAction)
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
@@ -232,6 +261,13 @@ class LayDown(smach.State):
         self.client.send_goal(goal)
         self.client.wait_for_result(rospy.Duration(25.0))
         lay_down_result = self.client.get_result()
+        if lay_down_result is None:
+            return 'server_problem'
+        if lay_down_result.result_info == 'goal_frame_missing' and self.whole_body is not None:
+            self.whole_body.gaze_point(point=geometry.Vector3(x=1.0, y=0.0, z=0.55), ref_frame_id='base_link')
+            self.client.send_goal(goal)
+            self.client.wait_for_result(rospy.Duration(25.0))
+            lay_down_result = self.client.get_result()
         if lay_down_result.result_info == 'succeeded':
             rospy.loginfo('Picked object ' + str(userdata.object_name))
             out = 'succeeded'
@@ -245,14 +281,38 @@ class LayDown(smach.State):
 class Handover(smach.State):
 
     def __init__(self):
-        smach.State.__init__(self, outcomes=['succeeded'])
+        smach.State.__init__(self, outcomes=['succeeded', 'server_problem'])
+        self.client = actionlib.SimpleActionClient('/handover', HandoverAction)
+        self.robot = Robot()
+        try:
+            self.whole_body = self.robot.try_get('whole_body')
+            self.suction = self.robot.try_get('suction')
+        except Exception as e:
+            rospy.loginfo('Problem finding: ' + str(e))
+            self.whole_body = None
         # TODO: Handover wegen suction cup Pumpe checken
 
     def execute(self, userdata):
         print(50 * '#' + '\n')
-        rospy.loginfo('Info')
+        goal = HandoverGoal()
+        self.client.wait_for_server(rospy.Duration(15.0))
+        self.client.send_goal(goal)
+        handover_result = self.client.wait_for_result(rospy.Duration(25.0))
+        if handover_result and self.suction is not None and self.whole_body is not None:
+            self.suction.command(False)
+            rospy.loginfo('Handover succeeded')
+            rospy.loginfo('Returning to neutral position')
+            self.whole_body.move_to_joint_positions(neutral_joint_positions)
+            rospy.sleep(1.0)
+            vel = self.whole_body.joint_velocities
+            while all(abs(i) > 0.05 for i in vel.values()):
+                vel = self.whole_body.joint_velocities
+            rospy.sleep(1)
+            out = 'succeeded'
+        else:
+            out = 'server_problem'
         print('\n' + 50 * '#')
-        return 'succeeded'
+        return out
 
 
 class GoToNeutral(smach.State):
@@ -333,10 +393,11 @@ class MoveToLastWaypoint(smach.State):
 
 def create_small_objects_sm():
 
-    sm = smach.StateMachine(outcomes=['Exit', 'Exit_successful'], input_keys=['object_action', 'object_name', 'map'])
+    sm = smach.StateMachine(outcomes=['Exit', 'Exit_successful'], input_keys=['object_action', 'object_name',
+                                                                              'map', 'waypoint_number'])
 
     # define some userdata
-    sm.userdata.waypoint_number = 0
+    #sm.userdata.waypoint_number = 0
 
     with sm:
 
@@ -372,7 +433,8 @@ def create_small_objects_sm():
                                MoveToDropPoint(),
                                transitions={'lay_down_object': 'Lay_Down',
                                             'hand_over_object': 'Handover',
-                                            'drop_point_not_reached': 'Exit'},
+                                            'drop_point_not_reached': 'Exit',
+                                            'no_object_action': 'Exit_successful'},
                                remapping={'object_action': 'object_action'})
 
         smach.StateMachine.add('Lay_Down',
@@ -380,10 +442,10 @@ def create_small_objects_sm():
                                transitions={'succeeded': 'Exit_successful',
                                             'server_problem': 'Exit'})
 
-        smach.StateMachine.add('Handover', smach_ros.SimpleActionState('/handover', HandoverAction),
+        smach.StateMachine.add('Handover',
+                               Handover(),
                                transitions={'succeeded': 'Exit_successful',
-                                            'preempted': 'Exit',
-                                            'aborted': 'Exit'})
+                                            'server_problem': 'Exit'})
 
         smach.StateMachine.add('Go_To_Neutral',
                                GoToNeutral(),

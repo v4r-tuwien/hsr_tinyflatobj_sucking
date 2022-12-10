@@ -41,6 +41,7 @@ class ArmMovementActionServer:
         self.whole_body = self.robot.try_get('whole_body')
         self.suction = self.robot.get('suction')
         self.omni_base = self.robot.get('omni_base')
+        self.gripper = self.robot.try_get('gripper')
 
         # For coordinate transformations
         self.tfBuffer = tf2_ros.Buffer()
@@ -72,9 +73,13 @@ class ArmMovementActionServer:
         self.eef_link = move_group.get_end_effector_link()
         self.group_names = self.robot_cmd.get_group_names()
 
-        self.add_box()
+        self.add_box()  # adding floor
         move_group.allow_replanning(True)
         move_group.set_num_planning_attempts(5)
+        move_group.set_planning_time(10.0)
+        #move_group.set_planner_id('PRMkConfigDefault') geht
+        #move_group.set_planner_id('KPIECEkConfigDefault') geht ned
+        move_group.set_planner_id('RRTstarkConfigDefault')
 
         return move_group
 
@@ -82,17 +87,27 @@ class ArmMovementActionServer:
         # add table as collision object on the ground
         coll_objects = self.get_table_collision_object()
         table_count = 0
+
+        print('Removing former collision objects:')
+        scene_objects = self.scene.get_objects()
+        for object_key in scene_objects.keys():
+            if object_key != 'floor':
+                self.scene.remove_world_object(object_key)
+                print(str(object_key) + ' removed')
+
+        print('Adding new collision objects:')
         for coll_object in coll_objects:
             table_count = table_count + 1
-            rospy.loginfo('table_' + str(table_count) + ' added as collision object')
+            rospy.loginfo('table_' + str(table_count) + ' added')
             self.add_box('table_' + str(table_count), coll_object.center[0], coll_object.center[1],
-                         coll_object.center[2], coll_object.extent[0], coll_object.extent[1], coll_object.extent[2])
+                         coll_object.center[2]/2, coll_object.extent[0], coll_object.extent[1], coll_object.extent[2]/2)
 
-        # Define the actual workspace as a 3x3x3 box with hsr in the middle
+        # Define the actual workspace as a NxNx3 box with hsr in the middle
         hsr_pos = self.tfBuffer.lookup_transform('odom', 'base_link', rospy.Time(), rospy.Duration(4.0))
+        ws_box = 5
         self.move_group.set_workspace(
-            (-1.5 + hsr_pos.transform.translation.x, -1.5 + hsr_pos.transform.translation.y, -1, 1.5 +
-             hsr_pos.transform.translation.x, 1.5 + hsr_pos.transform.translation.y, 3))
+            (-ws_box + hsr_pos.transform.translation.x, -ws_box + hsr_pos.transform.translation.y, -1, ws_box +
+             hsr_pos.transform.translation.x, ws_box + hsr_pos.transform.translation.y, 3))
 
         # Reset the collision object map
         self.clear_octomap()
@@ -118,6 +133,10 @@ class ArmMovementActionServer:
             self.server.set_succeeded(result)
             return
 
+        # close gripper
+        self.gripper.command(0.0)
+        rospy.sleep(2.0)
+
         # Distance between hsr hand and suction cup
         hand2cup = self.tfBuffer.lookup_transform('hand_palm_link', 'hand_l_finger_vacuum_frame', rospy.Time(),
                                                   rospy.Duration(4.0))
@@ -131,19 +150,15 @@ class ArmMovementActionServer:
         # hand2cup distance gets added to object position / therefore rotation around x-axis
         # z_offset from cup to object should be 0.05
         rot_angle = -pi - hand2cup_ang_x_axis
-        pose_goal.pose.position.x = -hand2cup.transform.translation.x
-        pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
-                                      hand2cup.transform.translation.z)
+        pose_goal.pose.position.y = -hand2cup.transform.translation.x
+        pose_goal.pose.position.x = (cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
+                                     hand2cup.transform.translation.z)
         pose_goal.pose.position.z = 0.05 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
                                             hand2cup.transform.translation.z)
-        pose_goal.pose.orientation.x = 0
-        pose_goal.pose.orientation.y = 0
-        pose_goal.pose.orientation.z = 0
-        pose_goal.pose.orientation.w = 1
 
-        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([pose_goal.pose.orientation.x,
-            pose_goal.pose.orientation.y, pose_goal.pose.orientation.z, pose_goal.pose.orientation.w])
+        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([0, 0, 0, 1])
         ang_x_axis = ang_x_axis + rot_angle
+        ang_z_axis = ang_z_axis + pi / 2
         [pose_goal.pose.orientation.x, pose_goal.pose.orientation.y, pose_goal.pose.orientation.z,
             pose_goal.pose.orientation.w] = quaternion_from_euler(ang_x_axis, ang_y_axis, ang_z_axis)
 
@@ -164,10 +179,45 @@ class ArmMovementActionServer:
         if plan[0]:
             moveit_success = self.move_group.execute(plan[1])
         else:
-            result.result_info = 'no_path_found'
-            rospy.loginfo('no_path_found')
-            self.server.set_succeeded(result)
-            return
+            # no path found -> trying second pose without rotating pi/2
+            print('Trying second pose, no path found with first pose')
+
+            pose_goal = geometry_msgs.msg.PoseStamped()
+            pose_goal.header.frame_id = 'found_object_' + object_name
+
+            [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([0, 0, 0, 1])
+            ang_x_axis = ang_x_axis + rot_angle
+            [pose_goal.pose.orientation.x, pose_goal.pose.orientation.y, pose_goal.pose.orientation.z,
+             pose_goal.pose.orientation.w] = quaternion_from_euler(ang_x_axis, ang_y_axis, ang_z_axis)
+
+            pose_goal.pose.position.x = -hand2cup.transform.translation.x
+            pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
+                                          hand2cup.transform.translation.z)
+            pose_goal.pose.position.z = 0.05 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
+                                                hand2cup.transform.translation.z)
+
+            # second try with rotated pose
+            # moveit needs msg.Pose type
+            pose_goal_odom = self.tfBuffer.transform(pose_goal, 'odom', rospy.Duration(4.0))
+            pose_goal = geometry_msgs.msg.Pose()
+            pose_goal.position.x = pose_goal_odom.pose.position.x
+            pose_goal.position.y = pose_goal_odom.pose.position.y
+            pose_goal.position.z = pose_goal_odom.pose.position.z
+            pose_goal.orientation.x = pose_goal_odom.pose.orientation.x
+            pose_goal.orientation.y = pose_goal_odom.pose.orientation.y
+            pose_goal.orientation.z = pose_goal_odom.pose.orientation.z
+            pose_goal.orientation.w = pose_goal_odom.pose.orientation.w
+
+            self.publish_pose(pose_goal)
+            print('Set second target')
+            plan = self.move_group.plan(pose_goal)  # plan is a tuple: [success, trajectory, ..]
+            if plan[0]:
+                moveit_success = self.move_group.execute(plan[1])
+            else:
+                result.result_info = 'no_path_found'
+                rospy.loginfo('no_path_found')
+                self.server.set_succeeded(result)
+                return
         self.move_group.stop()
         rospy.sleep(0.5)
 
@@ -202,7 +252,7 @@ class ArmMovementActionServer:
         # check if marker frame for storage_box is published
         try:
             marker_pos = self.tfBuffer.lookup_transform('odom', 'ar_marker/720', rospy.Time(),
-                                                  rospy.Duration(4.0)) # gazebo 508 marker
+                                                  rospy.Duration(10.0)) # gazebo 508 marker
         except Exception as e:
             if 'source_frame does not exist' in str(e):
                 rospy.loginfo('goal_frame_missing')
@@ -273,10 +323,14 @@ class ArmMovementActionServer:
         if moveit_success:
             # Drop object
             self.suction.command(False)
-            arm_angle = self.whole_body.joint_positions['arm_roll_joint']
+
+            # TODO: Check drop
+            #arm_angle = self.whole_body.joint_positions['arm_roll_joint']
             for i in range(0,5):
-                self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle + 0.1})
-                self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle - 0.1})
+                #self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle + 0.1})
+                #self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle - 0.1})
+                self.gripper.command(0.0)
+                self.gripper.command(1.0)
             rospy.sleep(1)
 
             if not self.suction.pressure_sensor:
@@ -300,9 +354,11 @@ class ArmMovementActionServer:
         # Creates a flat box under the robot to represent the floor
         # Octomap voxels get neglected around normal collision objects, without the floor moveit detects a collision
 
+
+
         rospy.sleep(2) # sleep very important
         box_pose = geometry_msgs.msg.PoseStamped()
-        box_pose.header.frame_id = 'odom'
+        box_pose.header.frame_id = 'map'
         box_pose.pose.orientation.w = 1.0
         box_pose.pose.position.x = position_x
         box_pose.pose.position.y = position_y

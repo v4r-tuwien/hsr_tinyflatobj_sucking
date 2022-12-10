@@ -132,7 +132,7 @@ def create_and_load_maps():
 
     tu_room = Map('tu_room')
     tu_room.add_waypoint([-0.3, 0.77, 0, 1])
-    tu_room.add_waypoint([0.74, -0.11, 0.707, 0.707])
+    tu_room.add_waypoint([0.55, 1.9, -0.66, 0.75])
     tu_room.set_handover_point([0.46, -0.32, 0.7, 0.71])
     tu_room.set_lay_down_point([-0.2, -0.1, 0.8, -0.6])
     save_map(tu_room)
@@ -152,6 +152,9 @@ def create_and_load_maps():
         print('Error with custom map loading: ' + str(e))
         custom_1 = Map('custom_1')
         custom_2 = Map('custom_2')
+        save_map(custom_1)
+        save_map(custom_2)
+        print('Custom maps created')
 
     return gazebo_tu_room, tu_room, custom_1, custom_2
 
