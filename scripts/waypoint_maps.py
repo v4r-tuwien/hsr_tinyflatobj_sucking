@@ -10,13 +10,13 @@ from visualization_msgs.msg import Marker, MarkerArray
 class Map:
     def __init__(self, name):
         self.map_name = name
-        self.waypoints = []
+        self.viewpoints = []
         self.lay_down_point = None
         self.handover_point = None
 
-    def add_waypoint(self, pos):
-        waypoint = create_waypoint(pos[0], pos[1], pos[2], pos[3])
-        self.waypoints.append(waypoint)
+    def add_viewpoint(self, pos):
+        viewpoint = create_waypoint(pos[0], pos[1], pos[2], pos[3])
+        self.viewpoints.append(viewpoint)
 
     def set_lay_down_point(self, pos):
         self.lay_down_point = create_waypoint(pos[0], pos[1], pos[2], pos[3])
@@ -25,7 +25,7 @@ class Map:
         self.handover_point = create_waypoint(pos[0], pos[1], pos[2], pos[3])
 
     def delete_points(self):
-        self.waypoints = []
+        self.viewpoints = []
         self.lay_down_point = None
         self.handover_point = None
 
@@ -46,9 +46,9 @@ class PointPublisher:
         rospy.sleep(0.2)
 
         # displaying new markers
-        if map_class.waypoints != []:
-            for i in range(len(map_class.waypoints)):
-                self.publish_point(map_class.waypoints[i], 'waypoint_' + str(i))
+        if map_class.viewpoints != []:
+            for i in range(len(map_class.viewpoints)):
+                self.publish_point(map_class.viewpoints[i], 'viewpoint_' + str(i))
         if map_class.lay_down_point is not None:
             self.publish_point(map_class.lay_down_point, 'lay_down_point')
         if map_class.handover_point is not None:
@@ -124,15 +124,15 @@ def save_map(saved_map):
 
 def create_and_load_maps():
     gazebo_tu_room = Map('gazebo_tu_room')
-    gazebo_tu_room.add_waypoint([0, -1, -0.707, 0.707])
-    gazebo_tu_room.add_waypoint([1, -1.3, -0.9489846, 0.3153224])
+    gazebo_tu_room.add_viewpoint([0, -1, -0.707, 0.707])
+    gazebo_tu_room.add_viewpoint([1, -1.3, -0.9489846, 0.3153224])
     gazebo_tu_room.set_handover_point([0, 0, 0, 1])
     gazebo_tu_room.set_lay_down_point([0.6, -0.4, 0, 1])
     save_map(gazebo_tu_room)
 
     tu_room = Map('tu_room')
-    tu_room.add_waypoint([-0.3, 0.77, 0, 1])
-    tu_room.add_waypoint([0.55, 1.9, -0.66, 0.75])
+    tu_room.add_viewpoint([-0.3, 0.77, 0, 1])
+    tu_room.add_viewpoint([0.55, 1.9, -0.66, 0.75])
     tu_room.set_handover_point([0.46, -0.32, 0.7, 0.71])
     tu_room.set_lay_down_point([-0.2, -0.1, 0.8, -0.6])
     save_map(tu_room)

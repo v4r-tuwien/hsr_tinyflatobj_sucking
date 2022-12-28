@@ -94,8 +94,8 @@ class UserInput(smach.State):
     def __init__(self):
         smach.State.__init__(self, outcomes=['statemachine', 'finding', 'picking', 'laying', 'gaze', 'start_suction',
                                              'stop_suction', 'neutral', 'handover', 'quit'],
-                             input_keys=['object_action', 'object_name', 'map', 'gaze_height', 'waypoint_number'],
-                             output_keys=['object_action', 'object_name', 'map', 'gaze_height', 'waypoint_number'])
+                             input_keys=['object_action', 'object_name', 'map', 'gaze_height', 'viewpoint_number'],
+                             output_keys=['object_action', 'object_name', 'map', 'gaze_height', 'viewpoint_number'])
 
         self.hsr_position = waypoint_maps.Position()  # for adding waypoints
         self.point_publisher = waypoint_maps.PointPublisher()  # for publishing points
@@ -153,7 +153,7 @@ class UserInput(smach.State):
                 while not rospy.is_shutdown():
                     print('\nMap Settings:\n')
                     print('1 - Change map: \t' + str(userdata.map))
-                    print('2 - Add position as waypoint')
+                    print('2 - Add position as viewpoint')
                     print('3 - Set position as handover_point')
                     print('4 - Set position as lay_down_point')
                     print('5 - Save points')
@@ -178,9 +178,9 @@ class UserInput(smach.State):
                             userdata.map = gazebo_tu_room
                     elif char_in == '2':
                         pos = self.hsr_position.get_robot_position()
-                        userdata.map.add_waypoint(pos)
+                        userdata.map.add_viewpoint(pos)
                         print('Position: ' + str(pos))
-                        print('was added as waypoint')
+                        print('was added as viewpoint')
                     elif char_in == '3':
                         pos = self.hsr_position.get_robot_position()
                         userdata.map.set_handover_point(pos)
@@ -197,7 +197,7 @@ class UserInput(smach.State):
                     elif char_in == '6':
                         self.point_publisher.publish_points(userdata.map)
                         print('Publishing points as markers')
-                        print('Red - Waypoint / Green - Lay_Down_Point / Blue - Handover_Point')
+                        print('Red - Viewpoint / Green - Lay_Down_Point / Blue - Handover_Point')
                     elif char_in == '7':
                         userdata.map.delete_points()
                         print('Points deleted')
@@ -214,7 +214,7 @@ class UserInput(smach.State):
                     print('2 - Find object:\t' + str(userdata.object_name))
                     print('3 - Waypoint map:\t' + str(userdata.map))
                     print('4 - Gaze point height:\t' + str(userdata.gaze_height))
-                    print('5 - Reset waypoint number')
+                    print('5 - Reset viewpoint number')
                     print('')
                     print('6 - Back')
                     while True:
@@ -254,7 +254,7 @@ class UserInput(smach.State):
                         else:
                             userdata.gaze_height = 0.5
                     elif char_in == '5':
-                        userdata.waypoint_number = 0
+                        userdata.viewpoint_number = 0
                     elif char_in == '6':
                         break
                     else:
@@ -264,6 +264,7 @@ class UserInput(smach.State):
                     settings.object_action = userdata.object_action
                     settings.object_name = userdata.object_name
                     settings.map = str(userdata.map)
+                    settings.gaze_height = userdata.gaze_height
                     with open('maps/settings.pkl', 'wb') as f:
                         pickle.dump(settings, f)
 
@@ -309,6 +310,7 @@ class GazeAtPoint(smach.State):
         if self.whole_body is not None:
             rospy.loginfo('Gazing at point')
             self.whole_body.gaze_point(point=geometry.Vector3(x=1.0, y=0.0, z=userdata.gaze_height), ref_frame_id='base_link')
+            self.whole_body.move_to_joint_positions({'head_pan_joint': 0.0})
         else:
             rospy.loginfo('Could not gaze at point, is hsr connection established?')
         print('\n' + 50*'#' + '\n')
@@ -387,7 +389,7 @@ def main():
     sm.userdata.object_action = settings.object_action
     sm.userdata.object_name = settings.object_name
     sm.userdata.gaze_height = settings.gaze_height
-    sm.userdata.waypoint_number = 0
+    sm.userdata.viewpoint_number = 0
     for i in [gazebo_tu_room, tu_room, custom_1, custom_2]:
         if str(i) == settings.map:
             sm.userdata.map = i
@@ -419,7 +421,7 @@ def main():
                                remapping={'map': 'map',
                                           'object_action': 'object_action',
                                           'object_name': 'object_name',
-                                          'waypoint_number': 'waypoint_number'})
+                                          'viewpoint_number': 'viewpoint_number'})
 
         smach.StateMachine.add('Only_Find_Object',
                                smach_ros.SimpleActionState('Find_Object_Action_Server', FindObjectAction,
@@ -435,7 +437,7 @@ def main():
         smach.StateMachine.add('Only_Pick_Object',
                                smach_ros.SimpleActionState('Arm_Movement_Action_Server', ArmMovementAction,
                                                            goal_slots=['command'],
-                                                           exec_timeout=rospy.Duration(50.0),
+                                                           exec_timeout=rospy.Duration(65.0),
                                                            preempt_timeout=rospy.Duration(2.0),
                                                            server_wait_timeout=rospy.Duration(25.0)),
                                transitions={'succeeded': 'USER_INPUT',
@@ -446,7 +448,7 @@ def main():
         smach.StateMachine.add('Only_Lay_Object',
                                smach_ros.SimpleActionState('Arm_Movement_Action_Server', ArmMovementAction,
                                                            goal=ArmMovementGoal('lay_down'),
-                                                           exec_timeout=rospy.Duration(35.0),
+                                                           exec_timeout=rospy.Duration(65.0),
                                                            preempt_timeout=rospy.Duration(2.0),
                                                            server_wait_timeout=rospy.Duration(25.0)),
                                transitions={'succeeded': 'USER_INPUT',

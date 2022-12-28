@@ -149,11 +149,13 @@ class ArmMovementActionServer:
 
         # hand2cup distance gets added to object position / therefore rotation around x-axis
         # z_offset from cup to object should be 0.05
+        # additional z_offset can be chosen
+        z_add = 0.05
         rot_angle = -pi - hand2cup_ang_x_axis
         pose_goal.pose.position.y = -hand2cup.transform.translation.x
         pose_goal.pose.position.x = (cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
                                      hand2cup.transform.translation.z)
-        pose_goal.pose.position.z = 0.05 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
+        pose_goal.pose.position.z = 0.05 + z_add - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
                                             hand2cup.transform.translation.z)
 
         [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([0, 0, 0, 1])
@@ -175,7 +177,7 @@ class ArmMovementActionServer:
 
         self.publish_pose(pose_goal)
         print('Set target')
-        plan = self.move_group.plan(pose_goal) # plan is a tuple: [success, trajectory, ..]
+        plan = self.move_group.plan(pose_goal)  # plan is a tuple: [success, trajectory, ..]
         if plan[0]:
             moveit_success = self.move_group.execute(plan[1])
         else:
@@ -228,7 +230,7 @@ class ArmMovementActionServer:
             self.whole_body.end_effector_frame = u'hand_l_finger_vacuum_frame'
             self.suction.command(True)
             rospy.sleep(0.5)
-            self.whole_body.move_end_effector_by_line((0, 0, 1), 0.03)
+            self.whole_body.move_end_effector_by_line((0, 0, 1), 0.03 + z_add)
             rospy.sleep(0.5)
             z_distance = 0.02
             while self.suction.pressure_sensor is not True and z_distance > -0.01:
@@ -247,12 +249,15 @@ class ArmMovementActionServer:
             self.server.set_succeeded(result)
 
     def lay_down(self):
+        #box_marker = 'ar_marker/508' # Gazebo marker
+        box_marker = 'ar_marker/720' # Real marker
+
         # define result of action_sever
         result = ArmMovementActionResult().result
         # check if marker frame for storage_box is published
         try:
-            marker_pos = self.tfBuffer.lookup_transform('odom', 'ar_marker/720', rospy.Time(),
-                                                  rospy.Duration(10.0)) # gazebo 508 marker
+            marker_pos = self.tfBuffer.lookup_transform('odom', box_marker, rospy.Time(),
+                                                  rospy.Duration(10.0))
         except Exception as e:
             if 'source_frame does not exist' in str(e):
                 rospy.loginfo('goal_frame_missing')
@@ -260,46 +265,28 @@ class ArmMovementActionServer:
             self.server.set_succeeded(result)
             return
 
+        # publishing storage box frame
         box = geometry_msgs.msg.TransformStamped()
-        # box.header.frame_id = 'ar_marker/508'
-        box.header.frame_id = 'ar_marker/720'
+        box.header.frame_id = box_marker
         box.header.stamp = rospy.Time.now()
         box.child_frame_id = 'storage_box'
-        box.transform.translation.z = 0.1
+        box.transform.translation.z = 0.05
         [box.transform.rotation.x, box.transform.rotation.y, box.transform.rotation.z,
-         box.transform.rotation.w] = quaternion_from_euler(pi/2, pi/2, 0)
+         box.transform.rotation.w] = quaternion_from_euler(pi/2, -pi/2, 0)
         self.broadcaster.sendTransform(box)
         rospy.sleep(0.5)
 
-        # same rotations as in the pick_object function
-        # Distance between hsr hand and suction cup
-        hand2cup = self.tfBuffer.lookup_transform('hand_palm_link', 'hand_l_finger_vacuum_frame', rospy.Time(),
-                                                  rospy.Duration(4.0))
-        [hand2cup_ang_x_axis, hand2cup_ang_y_axis, hand2cup_ang_z_axis] = euler_from_quaternion(
-            [hand2cup.transform.rotation.x, hand2cup.transform.rotation.y, hand2cup.transform.rotation.z,
-             hand2cup.transform.rotation.w])
+        # close gripper
+        self.gripper.command(0.0)
+        rospy.sleep(1.0)
 
         pose_goal = geometry_msgs.msg.PoseStamped()
         pose_goal.header.frame_id = 'storage_box'
 
-        # hand2cup distance gets added to object position / therefore rotation around x-axis
-        # z_offset from cup to box should be 0.1
-        rot_angle = -pi - hand2cup_ang_x_axis
-        pose_goal.pose.position.x = -hand2cup.transform.translation.x
-        pose_goal.pose.position.y = -(cos(rot_angle) * hand2cup.transform.translation.y - sin(rot_angle) *
-                                      hand2cup.transform.translation.z)
-        pose_goal.pose.position.z = 0.1 - (sin(rot_angle) * hand2cup.transform.translation.y + cos(rot_angle) *
-                                            hand2cup.transform.translation.z)
-        pose_goal.pose.orientation.x = 0
-        pose_goal.pose.orientation.y = 0
-        pose_goal.pose.orientation.z = 0
-        pose_goal.pose.orientation.w = 1
-
-        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([pose_goal.pose.orientation.x,
-                                                                      pose_goal.pose.orientation.y,
-                                                                      pose_goal.pose.orientation.z,
-                                                                      pose_goal.pose.orientation.w])
-        ang_x_axis = ang_x_axis + rot_angle
+        [ang_x_axis, ang_y_axis, ang_z_axis] = euler_from_quaternion([0, 0, 0, 1])
+        ang_x_axis = ang_x_axis + pi / 2
+        [pose_goal.pose.position.x, pose_goal.pose.position.y, pose_goal.pose.position.z] = [0, 0, 0.25]
+        ang_z_axis = ang_z_axis + pi / 2
         [pose_goal.pose.orientation.x, pose_goal.pose.orientation.y, pose_goal.pose.orientation.z,
          pose_goal.pose.orientation.w] = quaternion_from_euler(ang_x_axis, ang_y_axis, ang_z_axis)
 
@@ -323,18 +310,17 @@ class ArmMovementActionServer:
         if moveit_success:
             # Drop object
             self.suction.command(False)
+            rospy.sleep(1)
 
-            # TODO: Check drop
-            #arm_angle = self.whole_body.joint_positions['arm_roll_joint']
-            for i in range(0,5):
-                #self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle + 0.1})
-                #self.whole_body.move_to_joint_positions({'arm_roll_joint': arm_angle - 0.1})
-                self.gripper.command(0.0)
-                self.gripper.command(1.0)
+            self.whole_body.end_effector_frame = u'hand_palm_link'
+            self.whole_body.move_end_effector_by_line((0, 1, 0), -0.05)
+            rospy.sleep(1)
+            self.whole_body.move_end_effector_by_line((0, 0, 1), -0.2)
             rospy.sleep(1)
 
             if not self.suction.pressure_sensor:
                 rospy.loginfo('lay_down succeeded')
+                self.whole_body.move_to_go()
                 result.result_info = 'succeeded'
                 self.server.set_succeeded(result)
             else:
@@ -353,8 +339,6 @@ class ArmMovementActionServer:
                 position_z=-0.07, size_x=10, size_y=10, size_z=0.1):
         # Creates a flat box under the robot to represent the floor
         # Octomap voxels get neglected around normal collision objects, without the floor moveit detects a collision
-
-
 
         rospy.sleep(2) # sleep very important
         box_pose = geometry_msgs.msg.PoseStamped()
@@ -415,6 +399,7 @@ class ArmMovementActionServer:
             print(e)
 
         return bb_list
+
 
 if __name__ == '__main__':
 
