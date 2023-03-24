@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 
 from hsrb_interface import Robot, geometry
@@ -28,7 +28,8 @@ import open3d as o3d
 from open3d_ros_helper import open3d_ros_helper as orh
 from sensor_msgs.msg import PointCloud2
 import copy
-
+from sensor_msgs.msg import PointCloud2
+from v4r_util.util import ros_bb_to_o3d_bb
 
 class ArmMovementActionServer:
     def __init__(self):
@@ -52,6 +53,12 @@ class ArmMovementActionServer:
         self.move_group = self.moveit_init()
         # For resetting the collision map
         self.clear_octomap = rospy.ServiceProxy('/clear_octomap', Empty)
+        pc_topic = '/hsrb/head_rgbd_sensor/depth_registered/rectified_points'
+        self.pub = rospy.Subscriber(pc_topic, PointCloud2, callback=self.pc_cb)
+        self.pc = None
+    
+    def pc_cb(self, pc):
+        self.pc = pc
 
     def moveit_init(self):
         """ Initializes MoveIt, sets workspace and creates collision environment
@@ -369,28 +376,20 @@ class ArmMovementActionServer:
         self.broadcaster.sendTransform(transform_frame)
 
     def get_table_collision_object(self):
-        topic = '/hsrb/head_rgbd_sensor/depth_registered/rectified_points'
         rospy.wait_for_service('/test/table_plane_extractor')
         bb_list = []
+        while self.pc is None:
+            rospy.logerr('Not done')
+            rospy.sleep(1.0)
+        
+        rospy.logerr('Done waiting')
 
         try:
             table_extractor = rospy.ServiceProxy('/test/table_plane_extractor', TablePlaneExtractor)
-            response = table_extractor(topic)
-            for pcd in response.clouds:
-                cloud = orh.rospc_to_o3dpc(pcd)
-                bb_cloud = cloud.get_oriented_bounding_box()
-
-                if bb_cloud.center[2] < 0.2:
-                    continue
-
-                bb_cloud.color = (0, 1, 0)
-                bb_cloud_mod = copy.deepcopy(bb_cloud)
-                bb_cloud_mod.color = (0, 0, 1)
-
-                bb_cloud_mod.center = (bb_cloud_mod.center[0], bb_cloud_mod.center[1], (bb_cloud_mod.center[2] + (bb_cloud_mod.extent[2] / 2)) / 2)
-                bb_cloud_mod.extent = (bb_cloud_mod.extent[0]+0.04, bb_cloud_mod.extent[1]+0.04, bb_cloud.center[2] + (bb_cloud_mod.extent[2] / 2))
-
-                bb_list.append(bb_cloud_mod)
+            response = table_extractor(self.pc)
+            for bb in response.plane_bounding_boxes.boxes:
+                o3d_bb = ros_bb_to_o3d_bb(bb)
+                bb_list.append(o3d_bb)
                 #print(bb_cloud_mod.center)
                 #print(bb_cloud_mod.extent)
                 #o3d.visualization.draw_geometries([cloud, bb_cloud, bb_cloud_mod])
